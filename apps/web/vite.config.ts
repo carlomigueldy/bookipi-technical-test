@@ -5,15 +5,6 @@ import react from '@vitejs/plugin-react';
 // dev server from silently drifting onto another port when 5173 is taken.
 export default defineConfig({
   plugins: [react()],
-  // pnpm's `node-linker=isolated` makes `node_modules/@flash/shared` a symlink into the
-  // workspace package. Vite's default `preserveSymlinks: false` resolves it to its real
-  // path (`packages/shared/dist/...`) *before* Rollup's commonjs interop sees the id, so
-  // `build.commonjsOptions.include: [/@flash\/shared/]` below never matches and the CJS
-  // package gets imported as if it were ESM (no named exports). Keeping the symlink path
-  // intact is what makes that include pattern actually match.
-  resolve: {
-    preserveSymlinks: true,
-  },
   server: {
     port: Number(process.env.WEB_PORT ?? 5173),
     strictPort: true,
@@ -26,7 +17,7 @@ export default defineConfig({
   },
   build: {
     commonjsOptions: {
-      include: [/@flash\/shared/, /node_modules/],
+      include: [/node_modules/, /packages[\\/]shared[\\/]dist[\\/]/],
     },
   },
 });

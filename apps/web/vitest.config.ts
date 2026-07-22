@@ -10,12 +10,15 @@ export default defineConfig({
   },
   build: {
     commonjsOptions: {
-      include: [/@flash\/shared/, /node_modules/],
+      include: [/node_modules/, /packages[\\/]shared[\\/]dist[\\/]/],
     },
   },
   test: {
     globals: true,
     environment: 'jsdom',
     root: './',
+    include: ['src/**/*.spec.ts', 'src/**/*.spec.tsx', 'src/**/*.test.tsx'],
+    restoreMocks: true,
+    clearMocks: true,
   },
 });

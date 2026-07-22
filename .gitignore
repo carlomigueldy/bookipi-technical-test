@@ -48,3 +48,7 @@ desktop.ini
 # committed, shared project config; settings.local.json is personal and never
 # shared (previously relied on the developer's global gitignore only).
 .claude/settings.local.json
+
+# Playwright output
+test-results/
+playwright-report/
