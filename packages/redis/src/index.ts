@@ -9,9 +9,15 @@ import { SaleRedisStore } from './sale-store';
 import type {
   CompensateOutcome,
   CompensateResult,
+  CompareRestoreReservationInput,
+  CompareRestoreReservationOutcome,
+  CompareRestoreReservationResult,
   PurchaseResult,
   ReconcileOutcome,
   ReconcileResult,
+  ReconcileStateOutcome,
+  ReconcileStateResult,
+  BuyerScanPage,
   ReservationEntry,
   ReservationRestoreInput,
   SaleConfigInput,
@@ -20,17 +26,21 @@ import type {
   SeedResult,
 } from './types';
 import {
+  COMPARE_RESTORE_RESERVATION_SCRIPT,
   LUA_SCRIPTS,
   PURCHASE_SCRIPT,
   COMPENSATE_SCRIPT,
   SEED_SCRIPT,
   STATUS_SCRIPT,
   RECONCILE_SCRIPT,
+  RECONCILE_MEMBERSHIP_SCRIPT,
+  RECONCILE_STATE_SCRIPT,
 } from './scripts/registry';
 import type { LuaScript } from './scripts/registry';
 import { isNoScriptError, runScript } from './scripts/run';
 
 export {
+  COMPARE_RESTORE_RESERVATION_SCRIPT,
   createRedisClient,
   closeRedisClient,
   SaleRedisStore,
@@ -40,6 +50,8 @@ export {
   SEED_SCRIPT,
   STATUS_SCRIPT,
   RECONCILE_SCRIPT,
+  RECONCILE_MEMBERSHIP_SCRIPT,
+  RECONCILE_STATE_SCRIPT,
   isNoScriptError,
   runScript,
 };
@@ -47,9 +59,15 @@ export type {
   CreateRedisClientOptions,
   CompensateOutcome,
   CompensateResult,
+  CompareRestoreReservationInput,
+  CompareRestoreReservationOutcome,
+  CompareRestoreReservationResult,
   PurchaseResult,
   ReconcileOutcome,
   ReconcileResult,
+  ReconcileStateOutcome,
+  ReconcileStateResult,
+  BuyerScanPage,
   ReservationEntry,
   ReservationRestoreInput,
   SaleConfigInput,

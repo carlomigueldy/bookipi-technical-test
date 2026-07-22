@@ -1,10 +1,10 @@
 import { Queue } from 'bullmq';
-import Redis from 'ioredis';
-
 import {
+  ORDERS_QUEUE_PREFIX,
   PERSIST_ORDER_JOB_NAME,
   type OrdersQueueJobPayload,
-} from '../../src/queue/orders-queue.service.js';
+} from '@flash/shared';
+import Redis from 'ioredis';
 
 export type ObservedQueueState = 'waiting' | 'active' | 'delayed' | 'failed';
 
@@ -79,7 +79,7 @@ export function createQueueTestObserver(options: {
     });
     queue = new Queue<OrdersQueueJobPayload>(options.queueName, {
       connection: redis,
-      prefix: 'bull',
+      prefix: ORDERS_QUEUE_PREFIX,
     });
     queue.on('error', errorListener);
     return queue;

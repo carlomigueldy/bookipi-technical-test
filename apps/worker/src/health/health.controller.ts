@@ -1,5 +1,10 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Res } from '@nestjs/common';
 import { HEALTH_PATH, type HealthResponse } from '@flash/shared';
+import { HealthService, type WorkerReadinessResponse } from './health.service.js';
+
+interface StatusReply {
+  status(code: number): unknown;
+}
 
 /**
  * Frozen Phase-0 health surface (contract §13). No global prefix is set on
@@ -11,6 +16,8 @@ const SERVICE_VERSION = '0.0.0';
 
 @Controller(HEALTH_PATH)
 export class HealthController {
+  constructor(private readonly healthService: HealthService) {}
+
   @Get()
   getHealth(): HealthResponse {
     return {
@@ -19,5 +26,12 @@ export class HealthController {
       version: SERVICE_VERSION,
       uptimeSeconds: process.uptime(),
     };
+  }
+
+  @Get('ready')
+  getReady(@Res({ passthrough: true }) reply: StatusReply): WorkerReadinessResponse {
+    const result = this.healthService.readiness();
+    reply.status(result.status === 'ok' ? 200 : 503);
+    return result;
   }
 }

@@ -23,23 +23,35 @@ import {
   OUTCOME_METRIC_FIELD,
   PURCHASE_OUTCOMES,
   saleKeys,
+  USER_ID_MAX_LENGTH,
+  USER_ID_MIN_LENGTH,
+  USER_ID_PATTERN,
   type PurchaseOutcome,
 } from '@flash/shared';
 
 import {
+  COMPARE_RESTORE_RESERVATION_SCRIPT,
   COMPENSATE_SCRIPT,
   PURCHASE_SCRIPT,
+  RECONCILE_MEMBERSHIP_SCRIPT,
   RECONCILE_SCRIPT,
+  RECONCILE_STATE_SCRIPT,
   SEED_SCRIPT,
   STATUS_SCRIPT,
 } from './scripts/registry';
 import { runScript } from './scripts/run';
 import type {
+  BuyerScanPage,
   CompensateOutcome,
   CompensateResult,
+  CompareRestoreReservationInput,
+  CompareRestoreReservationOutcome,
+  CompareRestoreReservationResult,
   PurchaseResult,
   ReconcileOutcome,
   ReconcileResult,
+  ReconcileStateOutcome,
+  ReconcileStateResult,
   ReservationEntry,
   ReservationRestoreInput,
   SaleConfigInput,
@@ -63,10 +75,28 @@ const COMPENSATE_OUTCOMES: readonly CompensateOutcome[] = [
 
 const RECONCILE_OUTCOMES: readonly ReconcileOutcome[] = ['RECONCILED', 'NOT_INITIALIZED'];
 
+const RECONCILE_STATE_OUTCOMES: readonly ReconcileStateOutcome[] = [
+  'RECONCILED',
+  'NOT_INITIALIZED',
+  'OVERCOMMITTED',
+];
+
+const RECONCILE_MEMBERSHIP_OUTCOMES = ['PRESENT', 'ABSENT'] as const;
+
+const COMPARE_RESTORE_RESERVATION_OUTCOMES: readonly CompareRestoreReservationOutcome[] = [
+  'RESTORED',
+  'ALREADY_MATCHED',
+  'CONFLICT',
+];
+
 /** Chunk size for the pipelined writes in `restoreReservations`. */
 const RESTORE_CHUNK_SIZE = 500;
 /** Default HSCAN page size for `scanReservations`. */
 const DEFAULT_SCAN_COUNT = 200;
+
+const UUID_PATTERN =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/i;
+const COMPARE_RESTORE_INPUT_KEYS = ['userId', 'reservationId', 'reservedAtMs'] as const;
 
 /** Canonical decimal formatting for numeric ARGV: no exponent, no sign padding. */
 function canonicalInt(n: number): string {
@@ -78,6 +108,66 @@ function assertMember<T extends string>(value: string, allowed: readonly T[], wh
     throw new Error(`SaleRedisStore: unrecognised ${what} code from Lua: '${value}'`);
   }
   return value as T;
+}
+
+function parseReservationEntry(userId: string, value: string): ReservationEntry {
+  const separator = value.indexOf(':');
+  if (separator !== -1 && separator !== value.lastIndexOf(':')) {
+    throw new Error(`SaleRedisStore: malformed reservation ledger value for user '${userId}'`);
+  }
+
+  const reservationId = separator === -1 ? value : value.slice(0, separator);
+  if (!UUID_PATTERN.test(reservationId)) {
+    throw new Error(`SaleRedisStore: malformed reservation ledger value for user '${userId}'`);
+  }
+
+  if (separator === -1) {
+    return { userId, reservationId, reservedAtMs: null };
+  }
+
+  const timestampText = value.slice(separator + 1);
+  const reservedAtMs = Number(timestampText);
+  if (!/^\d+$/.test(timestampText) || !Number.isSafeInteger(reservedAtMs) || reservedAtMs < 0) {
+    throw new Error(`SaleRedisStore: malformed reservation ledger value for user '${userId}'`);
+  }
+
+  return { userId, reservationId, reservedAtMs };
+}
+
+function assertCompareRestoreReservationInput(
+  input: CompareRestoreReservationInput,
+): asserts input is CompareRestoreReservationInput {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new TypeError('Invalid compare-and-restore reservation input');
+  }
+
+  const keys = Reflect.ownKeys(input);
+  if (
+    keys.length !== COMPARE_RESTORE_INPUT_KEYS.length ||
+    keys.some(
+      (key) =>
+        typeof key !== 'string' ||
+        !COMPARE_RESTORE_INPUT_KEYS.includes(key as (typeof COMPARE_RESTORE_INPUT_KEYS)[number]),
+    )
+  ) {
+    throw new TypeError('Invalid compare-and-restore reservation input keys');
+  }
+
+  if (
+    typeof input.userId !== 'string' ||
+    input.userId !== input.userId.trim() ||
+    input.userId.length < USER_ID_MIN_LENGTH ||
+    input.userId.length > USER_ID_MAX_LENGTH ||
+    !USER_ID_PATTERN.test(input.userId)
+  ) {
+    throw new TypeError('Invalid compare-and-restore reservation userId');
+  }
+  if (typeof input.reservationId !== 'string' || !UUID_PATTERN.test(input.reservationId)) {
+    throw new TypeError('Invalid compare-and-restore reservation reservationId');
+  }
+  if (!Number.isSafeInteger(input.reservedAtMs) || input.reservedAtMs < 0) {
+    throw new TypeError('Invalid compare-and-restore reservation reservedAtMs');
+  }
 }
 
 export class SaleRedisStore {
@@ -222,6 +312,88 @@ export class SaleRedisStore {
     };
   }
 
+  /** Atomically derives stock from the authoritative Redis reservations ledger. */
+  async reconcileStockFromReservations(saleId: string): Promise<ReconcileStateResult> {
+    assertSaleId(saleId);
+    const keys = saleKeys(saleId);
+
+    const raw = await runScript<[string, number, number, number, number]>(
+      this.client,
+      RECONCILE_STATE_SCRIPT,
+      [keys.config, keys.stock, keys.reservations],
+      [],
+    );
+
+    const [code, previousStock, newStock, reservationCount, totalStock] = raw;
+    return {
+      outcome: assertMember(code, RECONCILE_STATE_OUTCOMES, 'reconcile state'),
+      previousStock,
+      newStock,
+      reservationCount,
+      totalStock,
+    };
+  }
+
+  /** One targeted HGET. Malformed ledger values fail closed. */
+  async getReservation(saleId: string, userId: string): Promise<ReservationEntry | null> {
+    assertSaleId(saleId);
+    const keys = saleKeys(saleId);
+    const value = await this.client.hget(keys.reservations, userId);
+    return value === null ? null : parseReservationEntry(userId, value);
+  }
+
+  /** Cursor-paged buyer enumeration; never materializes the full Set. */
+  async scanBuyers(
+    saleId: string,
+    cursor: string = '0',
+    count: number = DEFAULT_SCAN_COUNT,
+  ): Promise<BuyerScanPage> {
+    assertSaleId(saleId);
+    const keys = saleKeys(saleId);
+    const [nextCursor, userIds] = await this.client.sscan(keys.buyers, cursor, 'COUNT', count);
+    return { cursor: nextCursor, userIds };
+  }
+
+  /** Atomically aligns one buyer membership with the reservation ledger. */
+  async reconcileBuyerMembership(saleId: string, userId: string): Promise<'PRESENT' | 'ABSENT'> {
+    assertSaleId(saleId);
+    const keys = saleKeys(saleId);
+    const raw = await runScript<string>(
+      this.client,
+      RECONCILE_MEMBERSHIP_SCRIPT,
+      [keys.buyers, keys.reservations],
+      [userId],
+    );
+    return assertMember(raw, RECONCILE_MEMBERSHIP_OUTCOMES, 'reconcile membership');
+  }
+
+  /** Identity-safe atomic restoration for Phase 3 reconciliation. */
+  async compareAndRestoreReservation(
+    saleId: string,
+    input: CompareRestoreReservationInput,
+  ): Promise<CompareRestoreReservationResult> {
+    assertSaleId(saleId);
+    assertCompareRestoreReservationInput(input);
+    const keys = saleKeys(saleId);
+
+    const raw = await runScript<[string, string]>(
+      this.client,
+      COMPARE_RESTORE_RESERVATION_SCRIPT,
+      [keys.buyers, keys.reservations],
+      [input.userId, input.reservationId, canonicalInt(input.reservedAtMs)],
+    );
+    const [code, currentValue] = raw;
+
+    return {
+      outcome: assertMember(
+        code,
+        COMPARE_RESTORE_RESERVATION_OUTCOMES,
+        'compare-and-restore reservation',
+      ),
+      current: parseReservationEntry(input.userId, currentValue),
+    };
+  }
+
   /**
    * POST-FREEZE ADDITION (.claude/contracts/phase-1.md §11.2, finding 2). Cursor-paged
    * enumeration of the reservations hash via HSCAN — the primitive Phase 3's I4 boot
@@ -245,10 +417,7 @@ export class SaleRedisStore {
     for (let i = 0; i < flat.length; i += 2) {
       const userId = flat[i]!;
       const value = flat[i + 1]!;
-      const sep = value.indexOf(':');
-      const reservationId = sep === -1 ? value : value.slice(0, sep);
-      const reservedAtMs = sep === -1 ? null : Number(value.slice(sep + 1));
-      entries.push({ userId, reservationId, reservedAtMs });
+      entries.push(parseReservationEntry(userId, value));
     }
 
     return { cursor: nextCursor, entries };

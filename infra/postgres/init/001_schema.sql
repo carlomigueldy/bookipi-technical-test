@@ -18,13 +18,19 @@ CREATE TABLE sales (
 );
 
 CREATE TABLE orders (
-  id           uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+  id           uuid         PRIMARY KEY,
   user_id      text         NOT NULL,
   sale_id      text         NOT NULL REFERENCES sales (id) ON DELETE RESTRICT,
-  status       order_status NOT NULL DEFAULT 'reserved',
-  created_at   timestamptz  NOT NULL DEFAULT now(),
+  status       order_status NOT NULL,
+  created_at   timestamptz  NOT NULL,
   persisted_at timestamptz,
-  CONSTRAINT orders_user_id_len CHECK (char_length(user_id) BETWEEN 3 AND 64)
+  request_id   text         NOT NULL,
+  CONSTRAINT orders_user_id_len CHECK (char_length(user_id) BETWEEN 3 AND 64),
+  CONSTRAINT orders_request_id_len CHECK (char_length(request_id) BETWEEN 1 AND 128),
+  CONSTRAINT orders_persisted_at_state CHECK (
+    (status = 'persisted' AND persisted_at IS NOT NULL) OR
+    (status IN ('reserved', 'compensated') AND persisted_at IS NULL)
+  )
 );
 
 -- I2 (one confirmed order per user) — the second, independent enforcement point.

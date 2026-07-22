@@ -66,6 +66,34 @@ export interface ReconcileResult {
   newStock: number;
 }
 
+export type ReconcileStateOutcome = 'RECONCILED' | 'NOT_INITIALIZED' | 'OVERCOMMITTED';
+
+export interface ReconcileStateResult {
+  outcome: ReconcileStateOutcome;
+  previousStock: number;
+  newStock: number;
+  reservationCount: number;
+  totalStock: number;
+}
+
+export interface BuyerScanPage {
+  cursor: string;
+  userIds: string[];
+}
+
+export type CompareRestoreReservationOutcome = 'RESTORED' | 'ALREADY_MATCHED' | 'CONFLICT';
+
+export interface CompareRestoreReservationInput {
+  userId: string;
+  reservationId: string;
+  reservedAtMs: number;
+}
+
+export interface CompareRestoreReservationResult {
+  outcome: CompareRestoreReservationOutcome;
+  current: ReservationEntry | null;
+}
+
 /** One entry read back from the reservations hash via `scanReservations`. */
 export interface ReservationEntry {
   userId: string;

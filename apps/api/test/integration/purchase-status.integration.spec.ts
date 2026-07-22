@@ -50,8 +50,16 @@ describe('GET /api/purchase/:userId', () => {
       [harness.saleId],
     );
     await harness.pool.query(
-      `INSERT INTO orders (user_id, sale_id, status, persisted_at) VALUES ($1, $2, 'persisted', now())`,
-      ['persisted-2026', harness.saleId],
+      `INSERT INTO orders
+         (id, user_id, sale_id, status, created_at, persisted_at, request_id)
+       VALUES
+         ($1, $2, $3, 'persisted', now(), now(), $4)`,
+      [
+        '00000000-0000-4000-8000-000000000052',
+        'persisted-2026',
+        harness.saleId,
+        'fixture-persisted-2026',
+      ],
     );
 
     const res = await get(`${harness.baseUrl}/api/purchase/persisted-2026`);
@@ -72,8 +80,16 @@ describe('GET /api/purchase/:userId', () => {
       [harness.saleId],
     );
     await harness.pool.query(
-      `INSERT INTO orders (user_id, sale_id, status) VALUES ($1, $2, 'compensated')`,
-      ['compensated-2026', harness.saleId],
+      `INSERT INTO orders
+         (id, user_id, sale_id, status, created_at, persisted_at, request_id)
+       VALUES
+         ($1, $2, $3, 'compensated', now(), NULL, $4)`,
+      [
+        '00000000-0000-4000-8000-000000000074',
+        'compensated-2026',
+        harness.saleId,
+        'fixture-compensated-2026',
+      ],
     );
 
     const res = await get(`${harness.baseUrl}/api/purchase/compensated-2026`);

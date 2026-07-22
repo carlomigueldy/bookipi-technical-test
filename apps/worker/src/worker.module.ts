@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { HealthModule } from './health/health.module';
+import { InfraModule } from './infra/infra.module';
+import { ReconciliationModule } from './reconciliation/reconciliation.module';
 
 /**
  * Phase 0 scaffold. Per contract §13, the worker is a Nest HTTP application
@@ -7,6 +9,6 @@ import { HealthModule } from './health/health.module';
  * BullMQ consumer in Phase 3, and the health server stays alongside it.
  */
 @Module({
-  imports: [HealthModule],
+  imports: [InfraModule, ReconciliationModule, HealthModule],
 })
 export class WorkerModule {}

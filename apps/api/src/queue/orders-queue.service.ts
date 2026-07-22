@@ -1,5 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { createRedisClient } from '@flash/redis';
+import {
+  ORDERS_JOB_ATTEMPTS,
+  ORDERS_JOB_BACKOFF_DELAY_MS,
+  ORDERS_QUEUE_PREFIX,
+  PERSIST_ORDER_JOB_NAME,
+  assertOrdersQueueJobPayload,
+  buildOrdersJobId,
+  type OrdersQueueJobPayload,
+} from '@flash/shared';
 import { Queue, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 
@@ -9,20 +18,6 @@ import type { ApiEnv } from '../config/env.js';
 export const MAX_PRODUCER_IN_FLIGHT = 64;
 export const PRODUCER_REOPEN_BACKOFF_MS = 1000;
 export const PRODUCER_RETIRE_BOUND_MS = 2 * 500 + 250;
-export const PERSIST_ORDER_JOB_NAME = 'persist-order';
-export const WORKER_MAX_ATTEMPTS = 5;
-
-export function buildOrdersJobId(saleId: string, userId: string): string {
-  return `${saleId}-${userId}`;
-}
-
-export interface OrdersQueueJobPayload {
-  saleId: string;
-  userId: string;
-  reservationId: string;
-  reservedAtMs: number;
-  requestId: string;
-}
 
 export type ReadinessResult = { ok: true } | { ok: false; error: unknown };
 type AddResult = { ok: true; job: Job } | { ok: false; error: unknown };
@@ -96,11 +91,12 @@ export class OrdersQueueService {
 
       let baseSettlement: AddSettlement;
       try {
+        assertOrdersQueueJobPayload(payload);
         baseSettlement = generation.queue
           .add(PERSIST_ORDER_JOB_NAME, payload, {
             jobId: buildOrdersJobId(payload.saleId, payload.userId),
-            attempts: WORKER_MAX_ATTEMPTS,
-            backoff: { type: 'exponential', delay: 200 },
+            attempts: ORDERS_JOB_ATTEMPTS,
+            backoff: { type: 'exponential', delay: ORDERS_JOB_BACKOFF_DELAY_MS },
             removeOnComplete: { count: 1000 },
             removeOnFail: false,
           })
@@ -150,7 +146,10 @@ export class OrdersQueueService {
   }
 
   protected createQueue(redis: Redis): Queue {
-    return new Queue(this.env.ORDERS_QUEUE_NAME, { connection: redis, prefix: 'bull' });
+    return new Queue(this.env.ORDERS_QUEUE_NAME, {
+      connection: redis,
+      prefix: ORDERS_QUEUE_PREFIX,
+    });
   }
 
   protected createGeneration(): ProducerGeneration {

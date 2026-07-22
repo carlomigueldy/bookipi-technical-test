@@ -1,6 +1,6 @@
 // T5 — SHA correctness (.claude/contracts/phase-1.md §6.3).
 //
-// For all four scripts: the client-computed sha1 must equal what the server itself
+// For every registered script: the client-computed sha1 must equal what the server itself
 // returns from `SCRIPT LOAD src`, and `numKeys` must match the highest `KEYS[n]`
 // actually referenced in the source. This is a Lua-adjacent spec (it exercises a real
 // server's SCRIPT LOAD), so it uses the package's real-Redis harness rather than
@@ -9,7 +9,7 @@ import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { connect } from '../../test/harness';
-import { LUA_SCRIPTS } from './registry';
+import { COMPARE_RESTORE_RESERVATION_SCRIPT, LUA_SCRIPTS } from './registry';
 
 describe('script registry', () => {
   let client: Redis;
@@ -47,5 +47,11 @@ describe('script registry', () => {
     for (const script of LUA_SCRIPTS) {
       expect(script.sha1).toMatch(/^[0-9a-f]{40}$/);
     }
+  });
+
+  it('registers the Phase 3 A2 compare-and-restore identity CAS with exactly two keys', () => {
+    expect(COMPARE_RESTORE_RESERVATION_SCRIPT.name).toBe('compare-restore-reservation');
+    expect(COMPARE_RESTORE_RESERVATION_SCRIPT.numKeys).toBe(2);
+    expect(LUA_SCRIPTS).toContain(COMPARE_RESTORE_RESERVATION_SCRIPT);
   });
 });

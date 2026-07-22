@@ -10,10 +10,11 @@
 //     can restore the I2 guard (not just the stock counter) without ever calling the
 //     banned SMEMBERS/HGETALL.
 import { afterEach, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
 
 import { saleKeys } from '@flash/shared';
 
-import { cleanup, connect, seedActiveSale, uniqueSaleId } from '../test/harness';
+import { cleanup, connect, connectMany, seedActiveSale, uniqueSaleId } from '../test/harness';
 import { SaleRedisStore } from './sale-store';
 
 describe('SaleRedisStore.reconcileStock — the warm-recovery primitive seed() cannot provide', () => {
@@ -216,6 +217,424 @@ describe('SaleRedisStore.scanReservations / restoreReservations — the I4 boot-
       await store.restoreReservations(saleId, []);
       expect(await client.scard(keys.buyers)).toBe(0);
       expect(await client.hlen(keys.reservations)).toBe(0);
+    } finally {
+      client.disconnect();
+    }
+  });
+});
+
+describe('Phase 3 Redis reconciliation primitives', () => {
+  let saleId: string | undefined;
+
+  afterEach(async () => {
+    if (saleId) {
+      await cleanup(saleId);
+      saleId = undefined;
+    }
+  });
+
+  it('getReservation performs targeted lookup and shares strict ledger parsing with scanReservations', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 5 });
+    const keys = saleKeys(saleId);
+
+    try {
+      const purchase = await store.purchase(saleId, 'targeted-buyer');
+      const reservation = await store.getReservation(saleId, 'targeted-buyer');
+      expect(reservation).toMatchObject({
+        userId: 'targeted-buyer',
+        reservationId: purchase.reservationId,
+      });
+      expect(reservation?.reservedAtMs).toBeGreaterThan(0);
+      expect(await store.getReservation(saleId, 'missing-buyer')).toBeNull();
+
+      await client.hset(keys.reservations, 'malformed-buyer', 'not-a-reservation');
+      await expect(store.getReservation(saleId, 'malformed-buyer')).rejects.toThrow(
+        'malformed reservation ledger value',
+      );
+      await expect(store.scanReservations(saleId)).rejects.toThrow(
+        'malformed reservation ledger value',
+      );
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('scanBuyers enumerates a Set through bounded SSCAN pages', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 600 });
+
+    try {
+      await Promise.all(
+        Array.from({ length: 600 }, (_, index) => store.purchase(saleId!, `paged-buyer-${index}`)),
+      );
+
+      let cursor = '0';
+      const seen = new Set<string>();
+      let pages = 0;
+      do {
+        const page = await store.scanBuyers(saleId, cursor, 5);
+        page.userIds.forEach((userId) => seen.add(userId));
+        cursor = page.cursor;
+        pages += 1;
+      } while (cursor !== '0');
+
+      expect(seen.size).toBe(600);
+      expect(pages).toBeGreaterThan(1);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('reconcileBuyerMembership restores ledger-backed buyers and removes only ledger-absent buyers', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 5 });
+    const keys = saleKeys(saleId);
+
+    try {
+      const purchase = await store.purchase(saleId, 'present-buyer');
+      expect(purchase.outcome).toBe('CONFIRMED');
+      await client.srem(keys.buyers, 'present-buyer');
+      await client.sadd(keys.buyers, 'stale-buyer');
+
+      expect(await store.reconcileBuyerMembership(saleId, 'present-buyer')).toBe('PRESENT');
+      expect(await client.sismember(keys.buyers, 'present-buyer')).toBe(1);
+      expect(await store.reconcileBuyerMembership(saleId, 'stale-buyer')).toBe('ABSENT');
+      expect(await client.sismember(keys.buyers, 'stale-buyer')).toBe(0);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('membership reconciliation cannot remove a concurrently-created live reservation', async () => {
+    const reconcileClient = connect();
+    const purchaseClient = connect();
+    const reconcileStore = new SaleRedisStore(reconcileClient);
+    const purchaseStore = new SaleRedisStore(purchaseClient);
+    saleId = await seedActiveSale(reconcileStore, { stock: 200 });
+    const keys = saleKeys(saleId);
+
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        const userId = `membership-race-${index}`;
+        const [, purchase] = await Promise.all([
+          reconcileStore.reconcileBuyerMembership(saleId, userId),
+          purchaseStore.purchase(saleId, userId),
+        ]);
+        expect(purchase.outcome).toBe('CONFIRMED');
+        expect(await reconcileClient.hexists(keys.reservations, userId)).toBe(1);
+        expect(await reconcileClient.sismember(keys.buyers, userId)).toBe(1);
+      }
+    } finally {
+      reconcileClient.disconnect();
+      purchaseClient.disconnect();
+    }
+  });
+
+  it('atomically reconciles stock to totalStock minus the reservations ledger', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 10 });
+    const keys = saleKeys(saleId);
+
+    try {
+      await store.purchase(saleId, 'stock-ledger-1');
+      await store.purchase(saleId, 'stock-ledger-2');
+      await client.set(keys.stock, '99');
+
+      const result = await store.reconcileStockFromReservations(saleId);
+      expect(result).toEqual({
+        outcome: 'RECONCILED',
+        previousStock: 99,
+        newStock: 8,
+        reservationCount: 2,
+        totalStock: 10,
+      });
+      expect(await client.get(keys.stock)).toBe('8');
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('serializes stock reconciliation with purchases on either side without losing a decrement', async () => {
+    const reconcileClient = connect();
+    const purchaseClient = connect();
+    const reconcileStore = new SaleRedisStore(reconcileClient);
+    const purchaseStore = new SaleRedisStore(purchaseClient);
+    saleId = await seedActiveSale(reconcileStore, { stock: 150 });
+    const keys = saleKeys(saleId);
+
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        await reconcileClient.set(keys.stock, '149');
+        const [, purchase] = await Promise.all([
+          reconcileStore.reconcileStockFromReservations(saleId),
+          purchaseStore.purchase(saleId, `stock-race-${index}`),
+        ]);
+        expect(purchase.outcome).toBe('CONFIRMED');
+        const reservationCount = await reconcileClient.hlen(keys.reservations);
+        expect(Number(await reconcileClient.get(keys.stock))).toBe(150 - reservationCount);
+      }
+    } finally {
+      reconcileClient.disconnect();
+      purchaseClient.disconnect();
+    }
+  });
+
+  it('fails closed when uninitialized or overcommitted and never clamps/writes stock', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    const neverSeeded = uniqueSaleId();
+
+    try {
+      expect(await store.reconcileStockFromReservations(neverSeeded)).toEqual({
+        outcome: 'NOT_INITIALIZED',
+        previousStock: -1,
+        newStock: -1,
+        reservationCount: 0,
+        totalStock: -1,
+      });
+
+      saleId = await seedActiveSale(store, { stock: 1 });
+      const keys = saleKeys(saleId);
+      await client.hset(
+        keys.reservations,
+        'overcommitted-1',
+        `${randomUUID()}:${Date.now()}`,
+        'overcommitted-2',
+        `${randomUUID()}:${Date.now()}`,
+      );
+      await client.set(keys.stock, '7');
+
+      expect(await store.reconcileStockFromReservations(saleId)).toEqual({
+        outcome: 'OVERCOMMITTED',
+        previousStock: 7,
+        newStock: 7,
+        reservationCount: 2,
+        totalStock: 1,
+      });
+      expect(await client.get(keys.stock)).toBe('7');
+    } finally {
+      client.disconnect();
+    }
+  });
+});
+
+describe('SaleRedisStore.compareAndRestoreReservation — Phase 3 A2 identity CAS', () => {
+  let saleId: string | undefined;
+
+  afterEach(async () => {
+    if (saleId) {
+      await cleanup(saleId);
+      saleId = undefined;
+    }
+  });
+
+  it('RESTORED writes the missing ledger identity before restoring buyer membership', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 10 });
+    const keys = saleKeys(saleId);
+    const input = {
+      userId: 'cas-restored-buyer',
+      reservationId: randomUUID(),
+      reservedAtMs: 1_700_000_000_001,
+    };
+
+    try {
+      expect(await store.compareAndRestoreReservation(saleId, input)).toEqual({
+        outcome: 'RESTORED',
+        current: input,
+      });
+      expect(await client.hget(keys.reservations, input.userId)).toBe(
+        `${input.reservationId}:${input.reservedAtMs}`,
+      );
+      expect(await client.sismember(keys.buyers, input.userId)).toBe(1);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('ALREADY_MATCHED repairs membership while preserving the original reservedAtMs', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 10 });
+    const keys = saleKeys(saleId);
+    const reservationId = randomUUID();
+    const originalReservedAtMs = 1_700_000_000_002;
+    await client.hset(
+      keys.reservations,
+      'cas-matched-buyer',
+      `${reservationId}:${originalReservedAtMs}`,
+    );
+
+    try {
+      expect(
+        await store.compareAndRestoreReservation(saleId, {
+          userId: 'cas-matched-buyer',
+          reservationId,
+          reservedAtMs: originalReservedAtMs + 999,
+        }),
+      ).toEqual({
+        outcome: 'ALREADY_MATCHED',
+        current: {
+          userId: 'cas-matched-buyer',
+          reservationId,
+          reservedAtMs: originalReservedAtMs,
+        },
+      });
+      expect(await client.hget(keys.reservations, 'cas-matched-buyer')).toBe(
+        `${reservationId}:${originalReservedAtMs}`,
+      );
+      expect(await client.sismember(keys.buyers, 'cas-matched-buyer')).toBe(1);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('CONFLICT performs zero writes for a different live identity', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 10 });
+    const keys = saleKeys(saleId);
+    const userId = 'cas-conflict-buyer';
+    const liveReservationId = randomUUID();
+    const liveValue = `${liveReservationId}:1700000000003`;
+    await client.hset(keys.reservations, userId, liveValue);
+
+    try {
+      expect(
+        await store.compareAndRestoreReservation(saleId, {
+          userId,
+          reservationId: randomUUID(),
+          reservedAtMs: 1_700_000_000_004,
+        }),
+      ).toEqual({
+        outcome: 'CONFLICT',
+        current: {
+          userId,
+          reservationId: liveReservationId,
+          reservedAtMs: 1_700_000_000_003,
+        },
+      });
+      expect(await client.hget(keys.reservations, userId)).toBe(liveValue);
+      expect(await client.sismember(keys.buyers, userId)).toBe(0);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('200 concurrent stale R1 restore attempts cannot alter live R2 byte-for-byte', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 10 });
+    const keys = saleKeys(saleId);
+    const userId = 'cas-stale-r1-buyer';
+    const liveR2 = await store.purchase(saleId, userId);
+    expect(liveR2.outcome).toBe('CONFIRMED');
+    const liveValue = await client.hget(keys.reservations, userId);
+    const stockBefore = await client.get(keys.stock);
+    const staleR1 = randomUUID();
+
+    const clients = connectMany(20);
+    const stores = clients.map((redis) => new SaleRedisStore(redis));
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 200 }, (_, index) =>
+          stores[index % stores.length]!.compareAndRestoreReservation(saleId!, {
+            userId,
+            reservationId: staleR1,
+            reservedAtMs: 1_600_000_000_000 + index,
+          }),
+        ),
+      );
+
+      expect(results.every((result) => result.outcome === 'CONFLICT')).toBe(true);
+      expect(
+        results.every((result) => result.current?.reservationId === liveR2.reservationId),
+      ).toBe(true);
+      expect(await client.hget(keys.reservations, userId)).toBe(liveValue);
+      expect(await client.sismember(keys.buyers, userId)).toBe(1);
+      expect(await client.get(keys.stock)).toBe(stockBefore);
+    } finally {
+      clients.forEach((redis) => redis.disconnect());
+      client.disconnect();
+    }
+  });
+
+  it('200 concurrent CAS-versus-purchase races serialize to one identity without stock inflation or loss', async () => {
+    const observer = connect();
+    const observerStore = new SaleRedisStore(observer);
+    const raceClients = connectMany(40);
+    const stores = raceClients.map((redis) => new SaleRedisStore(redis));
+    saleId = await seedActiveSale(stores[0]!, { stock: 200 });
+    const keys = saleKeys(saleId);
+    const candidateIds = new Map<string, string>();
+
+    try {
+      const races = await Promise.all(
+        Array.from({ length: 200 }, async (_, index) => {
+          const userId = `cas-purchase-race-${index}`;
+          const candidateId = randomUUID();
+          candidateIds.set(userId, candidateId);
+          const casStore = stores[index % 20]!;
+          const purchaseStore = stores[20 + (index % 20)]!;
+          const casPromise = casStore.compareAndRestoreReservation(saleId!, {
+            userId,
+            reservationId: candidateId,
+            reservedAtMs: 1_700_000_100_000 + index,
+          });
+          const purchasePromise = purchaseStore.purchase(saleId!, userId);
+          const [cas, purchase] = await Promise.all([casPromise, purchasePromise]);
+          return { userId, cas, purchase };
+        }),
+      );
+
+      const confirmed = races.filter(({ purchase }) => purchase.outcome === 'CONFIRMED').length;
+      expect(Number(await observer.get(keys.stock))).toBe(200 - confirmed);
+      expect(await observer.hlen(keys.reservations)).toBe(200);
+      expect(await observer.scard(keys.buyers)).toBe(200);
+
+      for (const { userId, cas, purchase } of races) {
+        const stored = await observerStore.getReservation(saleId, userId);
+        expect(stored).not.toBeNull();
+        if (purchase.outcome === 'CONFIRMED') {
+          expect(cas.outcome).toBe('CONFLICT');
+          expect(stored?.reservationId).toBe(purchase.reservationId);
+        } else {
+          expect(purchase.outcome).toBe('ALREADY_PURCHASED');
+          expect(cas.outcome).toBe('RESTORED');
+          expect(stored?.reservationId).toBe(candidateIds.get(userId));
+        }
+      }
+    } finally {
+      raceClients.forEach((redis) => redis.disconnect());
+      observer.disconnect();
+    }
+  });
+
+  it.each([
+    { userId: ' x ', reservationId: randomUUID(), reservedAtMs: 1 },
+    { userId: 'valid-user', reservationId: 'not-a-uuid', reservedAtMs: 1 },
+    { userId: 'valid-user', reservationId: randomUUID(), reservedAtMs: -1 },
+    { userId: 'valid-user', reservationId: randomUUID(), reservedAtMs: 1.5 },
+    {
+      userId: 'valid-user',
+      reservationId: randomUUID(),
+      reservedAtMs: Number.MAX_SAFE_INTEGER + 1,
+    },
+  ])('rejects invalid compare-and-restore input before writing Redis: $input', async (input) => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    const targetSaleId = uniqueSaleId();
+    try {
+      await expect(store.compareAndRestoreReservation(targetSaleId, input)).rejects.toThrow(
+        TypeError,
+      );
+      expect(await client.exists(saleKeys(targetSaleId).reservations)).toBe(0);
     } finally {
       client.disconnect();
     }

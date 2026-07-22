@@ -7,14 +7,25 @@
 // itself reports for `SCRIPT LOAD src` (see scripts/registry.spec.ts, T5).
 import { createHash } from 'node:crypto';
 
+import { COMPARE_RESTORE_RESERVATION_LUA_SRC } from './compare-restore-reservation.lua';
 import { COMPENSATE_LUA_SRC } from './compensate.lua';
 import { PURCHASE_LUA_SRC } from './purchase.lua';
 import { RECONCILE_LUA_SRC } from './reconcile.lua';
+import { RECONCILE_MEMBERSHIP_LUA_SRC } from './reconcile-membership.lua';
+import { RECONCILE_STATE_LUA_SRC } from './reconcile-state.lua';
 import { SEED_LUA_SRC } from './seed.lua';
 import { STATUS_LUA_SRC } from './status.lua';
 
 export interface LuaScript {
-  readonly name: 'purchase' | 'compensate' | 'seed' | 'status' | 'reconcile';
+  readonly name:
+    | 'purchase'
+    | 'compensate'
+    | 'seed'
+    | 'status'
+    | 'reconcile'
+    | 'reconcile-membership'
+    | 'reconcile-state'
+    | 'compare-restore-reservation';
   readonly src: string;
   readonly sha1: string;
   readonly numKeys: number;
@@ -62,10 +73,34 @@ export const RECONCILE_SCRIPT: LuaScript = {
   numKeys: 2,
 };
 
+export const RECONCILE_MEMBERSHIP_SCRIPT: LuaScript = {
+  name: 'reconcile-membership',
+  src: RECONCILE_MEMBERSHIP_LUA_SRC,
+  sha1: sha1(RECONCILE_MEMBERSHIP_LUA_SRC),
+  numKeys: 2,
+};
+
+export const RECONCILE_STATE_SCRIPT: LuaScript = {
+  name: 'reconcile-state',
+  src: RECONCILE_STATE_LUA_SRC,
+  sha1: sha1(RECONCILE_STATE_LUA_SRC),
+  numKeys: 3,
+};
+
+export const COMPARE_RESTORE_RESERVATION_SCRIPT: LuaScript = {
+  name: 'compare-restore-reservation',
+  src: COMPARE_RESTORE_RESERVATION_LUA_SRC,
+  sha1: sha1(COMPARE_RESTORE_RESERVATION_LUA_SRC),
+  numKeys: 2,
+};
+
 export const LUA_SCRIPTS: readonly LuaScript[] = [
   PURCHASE_SCRIPT,
   COMPENSATE_SCRIPT,
   SEED_SCRIPT,
   STATUS_SCRIPT,
   RECONCILE_SCRIPT,
+  RECONCILE_MEMBERSHIP_SCRIPT,
+  RECONCILE_STATE_SCRIPT,
+  COMPARE_RESTORE_RESERVATION_SCRIPT,
 ];

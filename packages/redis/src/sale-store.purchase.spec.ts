@@ -62,4 +62,36 @@ describe('SaleRedisStore.purchase', () => {
       client.disconnect();
     }
   });
+
+  it('repairs ledger-only drift and rejects all 200 concurrent duplicate attempts without decrementing stock', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 100 });
+    const keys = saleKeys(saleId);
+    const userId = 'ledger-only-duplicate';
+
+    const original = await store.purchase(saleId, userId);
+    expect(original.outcome).toBe('CONFIRMED');
+    expect(original.reservationId).not.toBeNull();
+    const ledgerValue = await client.hget(keys.reservations, userId);
+    await client.srem(keys.buyers, userId);
+
+    const clients = connectMany(20);
+    const stores = clients.map((redis) => new SaleRedisStore(redis));
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 200 }, (_, index) =>
+          stores[index % stores.length]!.purchase(saleId!, userId),
+        ),
+      );
+
+      expect(results.every((result) => result.outcome === 'ALREADY_PURCHASED')).toBe(true);
+      expect(await client.get(keys.stock)).toBe('99');
+      expect(await client.sismember(keys.buyers, userId)).toBe(1);
+      expect(await client.hget(keys.reservations, userId)).toBe(ledgerValue);
+    } finally {
+      clients.forEach((redis) => redis.disconnect());
+      client.disconnect();
+    }
+  });
 });

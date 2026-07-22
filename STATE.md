@@ -17,9 +17,11 @@ not edit it, commit it, or create phase tags — see "Process notes" for why.
 
 **Phase 2 — API. CLOSED.** (tag `phase-2-done`)
 
-**Phase 3 — Worker & durability. NOT STARTED.** Next up: BullMQ consumer,
-idempotent Postgres persistence, DLQ compensation, and boot reconciliation. The
-architect must freeze `.claude/contracts/phase-3.md` before implementation fan-out.
+**Phase 3 — Worker & durability. CLOSED.** (tag `phase-3-done`)
+
+**Phase 4 — Frontend. NOT STARTED.** Next up: reproduce the read-only prototype as
+the React SPA, including buyer, purchase-status, ops, countdown, and polling flows.
+The architect must freeze `.claude/contracts/phase-4.md` before implementation.
 
 ## Gate policy — READ THIS FIRST
 
@@ -50,9 +52,10 @@ architect must freeze `.claude/contracts/phase-3.md` before implementation fan-o
 | `phase-0-done` | `d47314e`                                 | Bootstrap gate passed (merged to `main` as `aee91b9`) |
 | `phase-1-done` | see `git rev-parse phase-1-done^{commit}` | Domain core gate passed                               |
 | `phase-2-done` | see `git rev-parse phase-2-done^{commit}` | API gate passed                                       |
+| `phase-3-done` | see `git rev-parse phase-3-done^{commit}` | Worker and durability gate passed                     |
 
 Phase branches are cut from the **previous phase's tag**, not from `main`.
-Current branch: `phase-2/api`.
+Current branch: `phase-3/worker-durability`.
 
 > `phase-0-done` was moved once, deliberately: it originally pointed at `76059dc`,
 > which did **not** pass the gate (hollow build + vulnerable deps still present).
@@ -159,6 +162,69 @@ Phase-specific evidence:
 - Required source greps returned zero forbidden hits. `ignoreGhsas` remains `[]`.
 - Final Terra adversarial review and Sol security/final architecture review approved.
 
+## Phase 3 verification evidence
+
+All commands were re-run by the **orchestrator directly** on 2026-07-22. Turbo
+caching was bypassed and both API and worker integration suites were part of the
+same forced graph.
+
+```text
+$ pnpm install --frozen-lockfile
+Already up to date
+
+$ pnpm format:check
+All matched files use Prettier code style!
+
+$ pnpm exec turbo run lint typecheck test build test:integration --force
+Tasks:    25 successful, 25 total
+Cached:   0 cached, 25 total
+
+$ pnpm audit --audit-level high
+No known vulnerabilities found
+```
+
+Test totals in the forced graph:
+
+- Unit: **44 files, 591 tests passed**.
+- Integration: **14 files, 94 tests passed** — `@flash/worker` **22** and
+  `@flash/api` **72**, all against real Redis 7.4 and Postgres 16 via
+  Testcontainers.
+
+Phase-specific evidence:
+
+- Both API and worker build artifacts passed `scripts/assert-build-output.mjs`;
+  Compose config rendered successfully; `git diff --check` and all contract source
+  scans were clean.
+- The datastore fail probe proved integration tests fail rather than skip when their
+  real Redis/Postgres prerequisites are unavailable. The final run had zero skipped
+  datastore tests and zero unhandled errors.
+- **A1:** purchase-status persisted/compensated fixtures matched the final durable
+  schema and the API integration suite remained green.
+- **A2:** max-stalled terminal resolution worked with `attemptsMade < 5`; 200
+  concurrent stale-R1 CAS conflicts left live R2 byte-identical; bounded DLQ pages
+  resolved valid tail jobs behind malformed heads; the identical unsafe advisory-lock
+  negative control produced the forbidden state while production serialization did
+  not; built-worker SIGTERM and watchdog/resource proofs passed.
+- **A3:** retained malformed failed heads no longer blocked startup or fair traversal;
+  the R1-persisted/R2-live collision path compensated R2 exactly once, preserved PG
+  R1, restored Redis R1, and derived stock exactly once while readiness stayed
+  degraded for malformed internal work.
+- **A4:** the built P1 active-job crash and built P2 paused-queue restart recovered the
+  orphan before boot diff/consumer resume, persisted exactly one row, reached ready
+  only after safe resume, and shut down with no active work or leaked resources.
+- **A5:** the reconciliation session fence excluded competing boot diffs through the
+  ready transition; unexpected consumer resolve/reject forced readiness 503 and exit
+  1; cancellation during orphan recovery released the fence/resources and a later
+  process reclaimed the reservation exactly once.
+- **A6:** the minimum legal PG pool size 2 completed fenced boot and persistence;
+  production pool size 1 failed before health/resource creation; abort plus unlock
+  failure remained an aggregate through shutdown and exit 1, while exact pure abort
+  alone closed cleanly with exit 0.
+- Final Terra adversarial review: **APPROVE**. Final Sol architecture review:
+  **APPROVE**.
+- Final cleanup confirmed no Phase 3 Testcontainers, Docker containers, or worker/API
+  processes remained running.
+
 ## Phase 1 design decisions worth defending (README §12 material)
 
 1. **Window enforcement (I3) lives INSIDE `purchase.lua`**, using Redis `TIME`, not in
@@ -209,20 +275,21 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
 
 ## Open issues and accepted risks
 
-1. **Phase 3 owns full I4 durability.** Phase 2 proves that a confirmed reservation is
-   retained in the Redis ledger when enqueue fails. The worker, Postgres upsert, DLQ
-   compensation, and startup reconciliation are not implemented until Phase 3.
-2. **Identity is client-asserted by PRD scope.** Entitlement theft and per-candidate
+1. **Identity is client-asserted by PRD scope.** Entitlement theft and per-candidate
    buyer probing remain possible without authentication. `README.md` documents the
    production requirement: derive `userId` from an authenticated principal.
-3. **Readiness and metrics are public aggregate ops surfaces.** Accepted for this local
+2. **Readiness and metrics are public aggregate ops surfaces.** Accepted for this local
    take-home and required ops panel; a production deployment must put them behind an
    internal listener or authenticated gateway.
-4. **Rate limiting deliberately fails open.** I1–I4 remain independently enforced by
+3. **Rate limiting deliberately fails open.** I1–I4 remain independently enforced by
    Redis Lua/Postgres. Production still needs network-layer flood protection.
-5. **Single-sale assumptions are binding.** `orders_user_id_uniq` and the status lookup
+4. **Single-sale assumptions are binding.** `orders_user_id_uniq` and the status lookup
    are global by `user_id`. Multi-sale support must add sale scoping everywhere as a
    contract/schema migration.
+5. **Malformed internal queue data is retained and degrades readiness.** There is no
+   public injection path, but an operator-corrupted entry may repeat bounded error logs
+   until repaired. This is accepted and non-blocking because fail-closed retention is
+   required for I4; production should alert and rate-limit duplicate log emission.
 6. **`.dockerignore` correctness remains unverified from a cold clone** (carried from
    Phase 0); confirm image contents at Phase 6.
 7. **Node/pnpm pins remain tight:** Node 22.14.x and pnpm 11.9.x. Do not lower either
@@ -234,16 +301,17 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
 ## Exact next actions
 
 1. Have the Sol-mapped `architect` produce and freeze
-   `.claude/contracts/phase-3.md` before any implementation fan-out.
-2. The Phase 3 contract must define BullMQ consumer ownership, Postgres idempotent
-   persistence (`ON CONFLICT (user_id) DO NOTHING`), retry/DLQ behavior,
-   reservation-identity compensation, and boot reconciliation over the Phase 1 ledger.
-3. Fan out only after shared queue job/persistence/reconciliation interfaces are frozen.
-   Terra implements; Terra adversarial review attacks I1/I2/I4 failure modes; repeated
-   complex failures escalate to Sol.
-4. Gate Phase 3 with the canonical forced Turbo graph plus real failure-mode integration
-   tests for worker crash/redelivery, Postgres outage/recovery, DLQ compensation, and
-   startup reconciliation. Keep the negative-control practice for new atomicity claims.
+   `.claude/contracts/phase-4.md` before any frontend implementation. Do not infer the
+   Phase 4 contract from this handoff.
+2. Dispatch the frontend slice only to the `frontend-implementer`, with mandatory
+   `frontend-design` skill loading before any UI edit plus the relevant Vite/React
+   skills from the project-local manifest.
+3. Reproduce the approved, read-only `prototype/index.html` in `apps/web`: buyer card
+   and Buy Now flow, purchase-status checks, ops panel, sale countdown, and bounded
+   polling behavior. Never edit `prototype/`.
+4. Verify visual parity, accessibility, and end-to-end smoke behavior, then rerun the
+   canonical local forced graph with zero cache hits. Complete the required review loop
+   before the orchestrator commits, tags `phase-4-done`, and updates this file.
 
 ## Process notes
 
@@ -266,6 +334,16 @@ with a control demonstrating the harness detects the violation.
 
 ## Changelog
 
+- **`phase-3-done`** — Worker durability and recovery. Shared BullMQ contracts,
+  reservation-identity Postgres persistence, advisory-lock conflict adjudication,
+  identity-safe DLQ compensation, bounded fair reconciliation, paused-queue orphan
+  recovery, fenced ready transitions, fatal consumer supervision, and lossless
+  cancellation cleanup. Amendments A1–A6 close fixture alignment, terminality/CAS,
+  malformed-head fairness and job-ID collisions, active-orphan restart, lifecycle
+  fencing, and minimum PG capacity/error precedence. Final gate: 25/25 forced Turbo
+  tasks with zero cache hits; 591 unit and 94 integration tests; audit, Compose,
+  artifacts, scans, datastore fail probe, adversarial review, and final architecture
+  review all green.
 - **`phase-2-done`** — API. NestJS/Fastify sale, purchase, status, metrics,
   liveness/readiness, Redis-backed IP/user rate limiting, structured error envelopes,
   request IDs, security headers/CORS, Redis-anchored clock, and bounded BullMQ producer.

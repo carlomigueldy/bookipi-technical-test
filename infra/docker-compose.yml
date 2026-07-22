@@ -121,9 +121,19 @@ services:
       DATABASE_URL: postgresql://flash:flash@postgres:5432/flash
       REDIS_URL: redis://redis:6379
       SALE_ID: ${SALE_ID:-flash-2026}
+      SALE_NAME: ${SALE_NAME:-Aurora — Founders Edition}
+      SALE_STARTS_AT: ${SALE_STARTS_AT:-2026-07-22T12:00:00.000Z}
+      SALE_ENDS_AT: ${SALE_ENDS_AT:-2026-07-22T13:00:00.000Z}
+      SALE_TOTAL_STOCK: ${SALE_TOTAL_STOCK:-500}
       ORDERS_QUEUE_NAME: ${ORDERS_QUEUE_NAME:-orders}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-16}
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-5}
+      WORKER_PG_POOL_MAX: ${WORKER_PG_POOL_MAX:-10}
+      WORKER_PG_STATEMENT_TIMEOUT_MS: ${WORKER_PG_STATEMENT_TIMEOUT_MS:-2000}
+      WORKER_RECONCILE_INTERVAL_MS: ${WORKER_RECONCILE_INTERVAL_MS:-2000}
+      WORKER_RECONCILE_SCAN_COUNT: ${WORKER_RECONCILE_SCAN_COUNT:-200}
+      WORKER_DLQ_SWEEP_INTERVAL_MS: ${WORKER_DLQ_SWEEP_INTERVAL_MS:-1000}
+      WORKER_DLQ_SCAN_COUNT: ${WORKER_DLQ_SCAN_COUNT:-100}
     depends_on:
       redis:
         condition: service_healthy
@@ -133,7 +143,7 @@ services:
       test:
         [
           'CMD-SHELL',
-          'node -e "fetch(''http://127.0.0.1:3001/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+          'node -e "fetch(''http://127.0.0.1:3001/health/ready'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
         ]
       interval: 10s
       timeout: 5s
