@@ -19,9 +19,11 @@ not edit it, commit it, or create phase tags — see "Process notes" for why.
 
 **Phase 3 — Worker & durability. CLOSED.** (tag `phase-3-done`)
 
-**Phase 4 — Frontend. NOT STARTED.** Next up: reproduce the read-only prototype as
-the React SPA, including buyer, purchase-status, ops, countdown, and polling flows.
-The architect must freeze `.claude/contracts/phase-4.md` before implementation.
+**Phase 4 — Frontend. CLOSED.** (tag `phase-4-done`)
+
+**Phase 5 — Stress & tuning. NOT STARTED.** Next up: freeze the Phase 5 contract,
+implement the k6 stress scenarios and invariant audit, tune against measured results,
+and publish the results table.
 
 ## Gate policy — READ THIS FIRST
 
@@ -53,9 +55,10 @@ The architect must freeze `.claude/contracts/phase-4.md` before implementation.
 | `phase-1-done` | see `git rev-parse phase-1-done^{commit}` | Domain core gate passed                               |
 | `phase-2-done` | see `git rev-parse phase-2-done^{commit}` | API gate passed                                       |
 | `phase-3-done` | see `git rev-parse phase-3-done^{commit}` | Worker and durability gate passed                     |
+| `phase-4-done` | see `git rev-parse phase-4-done^{commit}` | Frontend gate passed                                  |
 
 Phase branches are cut from the **previous phase's tag**, not from `main`.
-Current branch: `phase-3/worker-durability`.
+Current branch: `phase-4/frontend`.
 
 > `phase-0-done` was moved once, deliberately: it originally pointed at `76059dc`,
 > which did **not** pass the gate (hollow build + vulnerable deps still present).
@@ -225,6 +228,68 @@ Phase-specific evidence:
 - Final cleanup confirmed no Phase 3 Testcontainers, Docker containers, or worker/API
   processes remained running.
 
+## Phase 4 verification evidence
+
+All commands were re-run by the **orchestrator directly** on 2026-07-23. The frozen
+install was unchanged, Turbo caching was bypassed, and the browser suite exercised
+the committed production build through Vite preview rather than the source-mode dev
+graph.
+
+```text
+$ pnpm install --frozen-lockfile
+Already up to date
+
+$ pnpm format:check
+All matched files use Prettier code style!
+
+$ pnpm exec turbo run lint typecheck test build test:integration --force
+Tasks:    25 successful, 25 total
+Cached:   0 cached, 25 total
+
+$ pnpm --filter @flash/web test:e2e
+28 passed (desktop-chromium and mobile-chromium)
+
+$ pnpm audit --audit-level high
+No known vulnerabilities found
+```
+
+Test totals in the forced graph:
+
+- Unit: **712 tests passed** — `@flash/web` **122**, `@flash/shared` **232**,
+  `@flash/redis` **70**, `@flash/api` **181**, and `@flash/worker` **107**.
+- Integration: **94 tests passed** — `@flash/api` **72** and `@flash/worker`
+  **22**, against real Redis 7.4 and Postgres 16 via Testcontainers.
+- Browser: **28/28 Playwright tests passed** across the desktop and mobile Chromium
+  projects, with no retries or skips; **8/8 axe scans** and **2/2 visual comparisons**
+  passed.
+
+Phase-specific evidence:
+
+- The responsive Aurora SPA reproduces the read-only prototype's product story,
+  acquisition console, server-time countdown, truthful supply meter, buyer and
+  reservation-status flows, protocol strip, API-backed ops ledger, and footer. The
+  browser checks found no horizontal overflow, page errors, console errors, or failed
+  same-app asset requests in the committed production-preview build.
+- Purchase representation remains fail-safe: no optimistic stock decrement, duplicate
+  submission, automatic POST retry, fabricated confirmation, stale status overwrite,
+  raw error leak, or compensated-as-purchased state. Exact HTTP 201 plus a valid
+  `CONFIRMED` envelope is the only success path; transport ambiguity remains
+  check-status-first.
+- All four named upcoming/active/sold-out/ended surfaces passed serious/critical axe
+  scans in both viewports. Keyboard focus, validation association, reduced motion,
+  200% zoom, mobile overflow, and the adversarial boundary/lifecycle cases were clean.
+- Visual baselines passed unchanged with SHA-256 hashes
+  `fe0720268a15d3fc484de3e5a2ca623e12c4d6b201d2e057b50bb15782ff67a3`
+  (desktop) and
+  `4dfabc79bc8c116acacbfe55f6610447382cd5ffddfcffd52148c95eb5e8f9ee`
+  (mobile).
+- Web lint, typecheck, unit tests, and production build passed independently. Build
+  artifact assertions, Compose rendering, dependency audit, formatting, diff checks,
+  contract path/source scans, and the scheduler bare-import scan were clean.
+- The final adversarial review returned **APPROVE**. The only remaining frontend
+  observation is the accepted medium issue recorded below; it is non-blocking and
+  does not weaken I1–I4.
+
 ## Phase 1 design decisions worth defending (README §12 material)
 
 1. **Window enforcement (I3) lives INSIDE `purchase.lua`**, using Redis `TIME`, not in
@@ -297,21 +362,24 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
    CommonJS `require` condition; see Phase 2 Amendment A1.
 8. **CI remains unavailable by owner decision** because of GitHub Actions billing. The
    local uncached gate above is the authoritative evidence until billing is restored.
+9. **A forced ops refresh during an active ops poll is coalesced until the next
+   scheduled poll.** The action remains bounded and non-overlapping, retains the last
+   good values, and does not affect purchase or invariant enforcement. This is an
+   accepted non-blocking medium frontend responsiveness risk for Phase 4.
 
 ## Exact next actions
 
 1. Have the Sol-mapped `architect` produce and freeze
-   `.claude/contracts/phase-4.md` before any frontend implementation. Do not infer the
-   Phase 4 contract from this handoff.
-2. Dispatch the frontend slice only to the `frontend-implementer`, with mandatory
-   `frontend-design` skill loading before any UI edit plus the relevant Vite/React
-   skills from the project-local manifest.
-3. Reproduce the approved, read-only `prototype/index.html` in `apps/web`: buyer card
-   and Buy Now flow, purchase-status checks, ops panel, sale countdown, and bounded
-   polling behavior. Never edit `prototype/`.
-4. Verify visual parity, accessibility, and end-to-end smoke behavior, then rerun the
-   canonical local forced graph with zero cache hits. Complete the required review loop
-   before the orchestrator commits, tags `phase-4-done`, and updates this file.
+   `.claude/contracts/phase-5.md`. Do not begin stress implementation before the
+   contract fixes the scenarios, thresholds, audit semantics, and evidence format.
+2. Dispatch Phase 5 implementation to the k6 specialist/general implementer with the
+   project-local `k6`, Redis, and PostgreSQL skills loaded before editing.
+3. Implement the required surge, duplicate-buyer, sold-out, and window-edge stress
+   scenarios; add the post-run Redis/Postgres I1/I2 audit; tune only from measured
+   bottlenecks; and produce the contract-required results table.
+4. Run the canonical local forced graph plus the Phase 5 stress gate and invariant
+   audit, complete adversarial review, then have the orchestrator commit, create the
+   annotated `phase-5-done` tag, and update this file.
 
 ## Process notes
 
@@ -334,6 +402,16 @@ with a control demonstrating the harness detects the violation.
 
 ## Changelog
 
+- **`phase-4-done`** — Responsive accessible Aurora flash-sale SPA. The frontend now
+  provides server-time sale state/countdown, exact stock presentation, a fail-safe
+  one-shot purchase flow, correlated reservation lookup, bounded generation-safe sale
+  and ops polling, API-backed readiness/metrics, and the prototype's titanium-card
+  visual signature without demo mutation controls. Final gate: 25/25 forced Turbo
+  tasks with zero cache hits; 712 unit, 94 integration, and 28 browser tests; 8 axe
+  scans and 2 visual comparisons; audit, Compose, artifacts, formatting, scans, and
+  adversarial review all green. Amendments A1–A5.1 close strict lifecycle ownership,
+  pnpm/Vite production resolution, visual determinism, sale boundary/error recovery,
+  exact purchase protocol handling, status correlation, and TSX spec discovery.
 - **`phase-3-done`** — Worker durability and recovery. Shared BullMQ contracts,
   reservation-identity Postgres persistence, advisory-lock conflict adjudication,
   identity-safe DLQ compensation, bounded fair reconciliation, paused-queue orphan
