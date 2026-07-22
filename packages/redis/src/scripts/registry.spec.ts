@@ -23,7 +23,7 @@ describe('script registry', () => {
   });
 
   it.each(LUA_SCRIPTS)(
-    '$name: client-computed sha1 matches the server\'s SCRIPT LOAD result',
+    "$name: client-computed sha1 matches the server's SCRIPT LOAD result",
     async (script) => {
       const serverSha = await client.script('LOAD', script.src);
       expect(script.sha1).toBe(serverSha);

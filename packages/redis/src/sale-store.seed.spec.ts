@@ -43,7 +43,9 @@ describe('SaleRedisStore.seed (T8)', () => {
       const alreadySeeded = results.filter((r) => r.outcome === 'ALREADY_SEEDED');
       expect(seeded).toHaveLength(1);
       expect(alreadySeeded).toHaveLength(49);
-      expect(results.filter((r) => r.outcome !== 'SEEDED' && r.outcome !== 'ALREADY_SEEDED')).toHaveLength(0);
+      expect(
+        results.filter((r) => r.outcome !== 'SEEDED' && r.outcome !== 'ALREADY_SEEDED'),
+      ).toHaveLength(0);
 
       for (const r of results) {
         expect(r.stockRemaining).toBe(250);
@@ -137,7 +139,10 @@ describe('SaleRedisStore.seed (T8)', () => {
     try {
       await store.seed(config);
 
-      const drift = await store.seed({ ...config, endsAt: new Date(now + 7_200_000).toISOString() });
+      const drift = await store.seed({
+        ...config,
+        endsAt: new Date(now + 7_200_000).toISOString(),
+      });
       expect(drift.outcome).toBe('CONFIG_DRIFT');
     } finally {
       client.disconnect();

@@ -16,7 +16,11 @@ export const PURCHASE_OUTCOMES = [
 export type PurchaseOutcome = (typeof PURCHASE_OUTCOMES)[number];
 
 /** Outcomes produced above the Redis layer. Never returned by Lua. */
-export const REQUEST_OUTCOMES = ['INVALID_USER_ID', 'RATE_LIMITED', 'UPSTREAM_UNAVAILABLE'] as const;
+export const REQUEST_OUTCOMES = [
+  'INVALID_USER_ID',
+  'RATE_LIMITED',
+  'UPSTREAM_UNAVAILABLE',
+] as const;
 export type RequestOutcome = (typeof REQUEST_OUTCOMES)[number];
 
 /** The full vocabulary. Used by `z.enum(...)` in the DTO layer — a readonly string tuple. */

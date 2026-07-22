@@ -11,7 +11,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { saleKeys } from '@flash/shared';
 
-import { cleanup, connect, connectMany, seedActiveSale, seedEndedSale, uniqueSaleId } from '../test/harness';
+import {
+  cleanup,
+  connect,
+  connectMany,
+  seedActiveSale,
+  seedEndedSale,
+  uniqueSaleId,
+} from '../test/harness';
 import { SaleRedisStore } from './sale-store';
 
 describe('SaleRedisStore.compensate (T7)', () => {
@@ -111,7 +118,11 @@ describe('SaleRedisStore.compensate (T7)', () => {
       const purchase = await store.purchase(saleId, 't7-wrong-token-buyer');
       expect(purchase.outcome).toBe('CONFIRMED');
 
-      const result = await store.compensate(saleId, 't7-wrong-token-buyer', 'totally-wrong-reservation-id');
+      const result = await store.compensate(
+        saleId,
+        't7-wrong-token-buyer',
+        'totally-wrong-reservation-id',
+      );
       expect(result.outcome).toBe('NOOP');
       expect(result.stockRemaining).toBe(9);
       expect(await client.get(keys.stock)).toBe('9');

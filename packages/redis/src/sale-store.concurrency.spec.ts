@@ -79,79 +79,76 @@ async function purchaseUnsafe(
 }
 
 describe('SaleRedisStore concurrency — the money test (T1) and its negative control (T2)', () => {
-  it(
-    `T1 — ${ATTEMPTS} concurrent attempts over ${CONNECTIONS} connections for stock=${STOCK}, run ${LOOPS}x`,
-    async () => {
-      const clients = connectMany(CONNECTIONS);
-      await warmUp(clients);
-      const stores = clients.map((c) => new SaleRedisStore(c));
+  it(`T1 — ${ATTEMPTS} concurrent attempts over ${CONNECTIONS} connections for stock=${STOCK}, run ${LOOPS}x`, async () => {
+    const clients = connectMany(CONNECTIONS);
+    await warmUp(clients);
+    const stores = clients.map((c) => new SaleRedisStore(c));
 
-      try {
-        for (let loop = 0; loop < LOOPS; loop += 1) {
-          const saleId = await seedActiveSale(stores[0]!, { stock: STOCK });
-          const userIds = distinctUserIds(`t1-loop${loop}`, ATTEMPTS);
+    try {
+      for (let loop = 0; loop < LOOPS; loop += 1) {
+        const saleId = await seedActiveSale(stores[0]!, { stock: STOCK });
+        const userIds = distinctUserIds(`t1-loop${loop}`, ATTEMPTS);
 
-          try {
-            const results = await Promise.all(
-              userIds.map((userId, i) => stores[i % stores.length]!.purchase(saleId, userId)),
-            );
+        try {
+          const results = await Promise.all(
+            userIds.map((userId, i) => stores[i % stores.length]!.purchase(saleId, userId)),
+          );
 
-            const confirmed = results.filter((r) => r.outcome === 'CONFIRMED');
-            const soldOut = results.filter((r) => r.outcome === 'SOLD_OUT');
-            const other = results.filter(
-              (r) => r.outcome !== 'CONFIRMED' && r.outcome !== 'SOLD_OUT',
-            );
+          const confirmed = results.filter((r) => r.outcome === 'CONFIRMED');
+          const soldOut = results.filter((r) => r.outcome === 'SOLD_OUT');
+          const other = results.filter(
+            (r) => r.outcome !== 'CONFIRMED' && r.outcome !== 'SOLD_OUT',
+          );
 
-            expect(confirmed).toHaveLength(STOCK);
-            expect(soldOut).toHaveLength(ATTEMPTS - STOCK);
-            expect(other).toHaveLength(0);
+          expect(confirmed).toHaveLength(STOCK);
+          expect(soldOut).toHaveLength(ATTEMPTS - STOCK);
+          expect(other).toHaveLength(0);
 
-            const keys = saleKeys(saleId);
-            const finalStock = Number(await clients[0]!.get(keys.stock));
-            expect(finalStock).toBe(0);
-            expect(finalStock).toBeGreaterThanOrEqual(0);
+          const keys = saleKeys(saleId);
+          const finalStock = Number(await clients[0]!.get(keys.stock));
+          expect(finalStock).toBe(0);
+          expect(finalStock).toBeGreaterThanOrEqual(0);
 
-            const buyersCount = await clients[0]!.scard(keys.buyers);
-            expect(buyersCount).toBe(STOCK);
+          const buyersCount = await clients[0]!.scard(keys.buyers);
+          expect(buyersCount).toBe(STOCK);
 
-            // The double-spend detector: every CONFIRMED must report a DISTINCT
-            // remaining value. Two concurrent non-atomic decrements would either
-            // report the same remaining value or skip one — asserted on the sorted
-            // array, not merely on the count.
-            const remainingValues = confirmed.map((r) => r.stockRemaining).sort((a, b) => a - b);
-            expect(remainingValues).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+          // The double-spend detector: every CONFIRMED must report a DISTINCT
+          // remaining value. Two concurrent non-atomic decrements would either
+          // report the same remaining value or skip one — asserted on the sorted
+          // array, not merely on the count.
+          const remainingValues = confirmed.map((r) => r.stockRemaining).sort((a, b) => a - b);
+          expect(remainingValues).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-            // Confirmed userIds are distinct and are exactly the buyers-set members.
-            const confirmedUserIds = new Set<string>();
-            results.forEach((r, i) => {
-              if (r.outcome === 'CONFIRMED') confirmedUserIds.add(userIds[i]!);
-            });
-            expect(confirmedUserIds.size).toBe(STOCK);
+          // Confirmed userIds are distinct and are exactly the buyers-set members.
+          const confirmedUserIds = new Set<string>();
+          results.forEach((r, i) => {
+            if (r.outcome === 'CONFIRMED') confirmedUserIds.add(userIds[i]!);
+          });
+          expect(confirmedUserIds.size).toBe(STOCK);
 
-            const buyerMembers = await clients[0]!.smembers(keys.buyers);
-            expect(new Set(buyerMembers)).toEqual(confirmedUserIds);
+          const buyerMembers = await clients[0]!.smembers(keys.buyers);
+          expect(new Set(buyerMembers)).toEqual(confirmedUserIds);
 
-            // Post-freeze (.claude/contracts/phase-1.md §11.1, finding 1): every
-            // CONFIRMED result must carry a distinct, non-empty reservationId, and the
-            // reservations hash must have exactly STOCK entries matching the buyers
-            // set. A second atomic-uniqueness proof, independent of the stockRemaining
-            // one above — two concurrent purchases racing to reuse a reservationId (or
-            // to skip writing one) would show up here even if they didn't skew stock.
-            const reservationIds = confirmed.map((r) => r.reservationId);
-            expect(reservationIds.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
-            expect(new Set(reservationIds).size).toBe(STOCK);
+          // Post-freeze (.claude/contracts/phase-1.md §11.1, finding 1): every
+          // CONFIRMED result must carry a distinct, non-empty reservationId, and the
+          // reservations hash must have exactly STOCK entries matching the buyers
+          // set. A second atomic-uniqueness proof, independent of the stockRemaining
+          // one above — two concurrent purchases racing to reuse a reservationId (or
+          // to skip writing one) would show up here even if they didn't skew stock.
+          const reservationIds = confirmed.map((r) => r.reservationId);
+          expect(reservationIds.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+          expect(new Set(reservationIds).size).toBe(STOCK);
 
-            const reservationCount = await clients[0]!.hlen(keys.reservations);
-            expect(reservationCount).toBe(STOCK);
-          } finally {
-            await cleanup(saleId);
-          }
+          const reservationCount = await clients[0]!.hlen(keys.reservations);
+          expect(reservationCount).toBe(STOCK);
+        } finally {
+          await cleanup(saleId);
         }
-      } finally {
-        clients.forEach((c) => c.disconnect());
       }
-    },
-  );
+    } finally {
+      clients.forEach((c) => c.disconnect());
+    }
+  });
 
   it('T2 — negative control: the same scenario against a non-atomic purchaseUnsafe() oversells', async () => {
     const clients = connectMany(CONNECTIONS);

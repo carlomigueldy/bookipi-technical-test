@@ -779,7 +779,9 @@ With `SALE_ID=flash-2026` the concrete keys are:
 | BullMQ | prefix `bull`, queue `orders` → `bull:orders:*` | BullMQ-managed | api (producer), worker (consumer) |
 
 - Timestamps in the `config` hash are stored as **ISO-8601 UTC strings**, not epoch millis.
-- BullMQ `jobId` is exactly `` `${saleId}:${userId}` `` — this is the idempotency key for I4.
+- BullMQ `jobId` was originally frozen here as `` `${saleId}:${userId}` ``. **This line is
+  superseded by the versioned Phase 2 Amendment A3 erratum in §20 below**: installed BullMQ
+  rejects that custom-id form, so the executable format is `` `${saleId}-${userId}` ``.
 - Queue name comes from `ORDERS_QUEUE_NAME` (default `orders`); the BullMQ `prefix` option is
   the literal string `bull` and is not configurable.
 - Key builders live in `@flash/shared` from **Phase 1** (`saleStockKey(saleId)` etc.).
@@ -893,3 +895,37 @@ Plus, by review (docker unavailable this phase):
 - No file exists outside the tree in §3.
 
 Then: commit → `git tag -a phase-0-done -m "Phase 0: bootstrap"` → update `STATE.md`.
+
+---
+
+## 20. ERRATUM — BullMQ custom job-id delimiter (Phase 2 Amendment A3)
+
+**Authority:** ARCHITECT · **Date:** 2026-07-22 · **Status:** FROZEN · **Amends:** §16
+
+This is a versioned erratum, not a silent rewrite of the Phase 0 decision. The original §16
+format, `` `${saleId}:${userId}` ``, cannot be submitted as a normal custom BullMQ job id.
+The installed `bullmq@5.80.9` validates `Job.opts.jobId` and throws
+`Custom Id cannot contain :` when a colon-bearing custom id does not have the legacy three-part
+repeatable-job form. The check is present in both installed CJS and ESM builds at
+`bullmq/dist/*/classes/job.js`; its source comment says the compatibility exception is temporary
+and will become a blanket `includes(':')` rejection in the next breaking change. The producer's
+observed hyphen fix is therefore the frozen executable contract:
+
+```ts
+export function buildOrdersJobId(saleId: string, userId: string): string {
+  return `${saleId}-${userId}`;
+}
+```
+
+All API, worker, reconciliation, and test code MUST import `buildOrdersJobId`; no consumer may
+reconstruct the delimiter independently. In the current single-sale system, `saleId` is one
+boot-validated process constant, so the format remains deterministic and unique per user within
+the only sale this system serves. It preserves the I4 property for which the id exists: an
+enqueue retry with the same `(saleId, userId)` produces the same BullMQ id and is a no-op if the
+first write landed.
+
+**Rejected alternatives.** Keeping `:` is unexecutable. Depending on BullMQ's legacy three-part
+exception would couple application ids to an internal repeatable-job compatibility format that
+the installed source explicitly marks for removal. A new encoded/versioned format would work but
+would create needless migration drift from the already-tested live producer in this single-sale
+take-home; `buildOrdersJobId` is the migration seam if multi-sale support is introduced later.
