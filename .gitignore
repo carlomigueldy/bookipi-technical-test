@@ -1,0 +1,50 @@
+# dependencies
+node_modules/
+
+# build outputs
+dist/
+build/
+.turbo/
+
+# TypeScript incremental build cache — NOT inside dist/, survives `rm -rf dist`,
+# and desyncs from nest-cli's deleteOutDir (see clean scripts, which also remove these)
+*.tsbuildinfo
+
+# test coverage
+coverage/
+
+# environment files (never commit real env values)
+.env
+.env.*.local
+!.env.example
+
+# k6 load-test result artifacts
+load/k6/results/
+load/k6/*.summary.json
+k6-results.json
+k6-summary.json
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# editor/IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code local (per-developer) settings — .claude/settings.json is the
+# committed, shared project config; settings.local.json is personal and never
+# shared (previously relied on the developer's global gitignore only).
+.claude/settings.local.json

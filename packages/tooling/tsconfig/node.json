@@ -1,0 +1,11 @@
+{
+  "extends": "./base.json",
+  "display": "Flash Node (CommonJS)",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "types": ["node"]
+  }
+}

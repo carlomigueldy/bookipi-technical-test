@@ -1,0 +1,9 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+allowBuilds:
+  '@nestjs/core': true
+  '@swc/core': true
+  esbuild: true
+overrides:
+  vite: ^6.0.5
