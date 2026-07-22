@@ -329,7 +329,7 @@ subject`. Scope is typically the slice or package touched (e.g.
 
 ## 11. Local dev quickstart
 
-Prerequisites: **Node 22.11.x**, **pnpm 11.9.x** (both pinned — see `.nvmrc` /
+Prerequisites: **Node 22.14.x**, **pnpm 11.9.x** (both pinned — see `.nvmrc` /
 `package.json#packageManager`). Docker Desktop with Compose v2 for the datastore
 containers (note: in some environments Docker/WSL integration may be disabled — in
 that case compose files are still authored and reviewed, just not executed locally;

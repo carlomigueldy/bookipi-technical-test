@@ -13,7 +13,6 @@
     "./tsconfig/react.json": "./tsconfig/react.json"
   },
   "scripts": {
-    "build": "echo \"@flash/tooling: no build\"",
     "typecheck": "echo \"@flash/tooling: no typecheck\"",
     "lint": "echo \"@flash/tooling: no lint\"",
     "test": "echo \"@flash/tooling: no tests\"",

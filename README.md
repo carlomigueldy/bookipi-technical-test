@@ -42,7 +42,7 @@ the durable record.
 
 ## Local dev quickstart
 
-Prerequisites: **Node 22.11.x**, **pnpm 11.9.x** (both pinned — see `.nvmrc` and
+Prerequisites: **Node 22.14.x**, **pnpm 11.9.x** (both pinned — see `.nvmrc` and
 `package.json#packageManager`), Docker Desktop with Compose v2 for the datastore
 containers.
 

@@ -211,7 +211,7 @@ bookipi-technical-test/
   "type": "module",
   "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": ">=22.11.0 <23",
+    "node": ">=22.14.0 <23",
     "pnpm": ">=11.9.0"
   },
   "scripts": {
@@ -240,7 +240,7 @@ bookipi-technical-test/
 - `stress` intentionally does not shell out to `k6` in Phase 0 (k6 is not installed in CI).
 - No `postinstall`, no `prepare`, no husky in Phase 0.
 
-`.nvmrc` content: `22.11.0`
+`.nvmrc` content: `22.14.0`
 `.npmrc` content (exactly):
 ```
 node-linker=isolated
@@ -609,8 +609,12 @@ Container names: `flash-redis`, `flash-postgres`, `flash-api`, `flash-worker`, `
 - `redis` mounts volume `flash-redisdata:/data`.
 - All five services set `restart: unless-stopped`.
 - `web` build passes `args: { VITE_API_BASE_URL: http://localhost:3000/api }` (build-time bake).
-- Dockerfiles: multi-stage, `node:22.11-alpine` base, `corepack enable && corepack prepare pnpm@11.9.0 --activate`,
-  `pnpm install --frozen-lockfile`, `pnpm --filter @flash/<app>... build`, then a runtime stage running as
+- Dockerfiles: multi-stage, `node:22.14-alpine` base (the `22.11-alpine` tag is below
+  pnpm@11.9.0's minimum supported Node of `>=22.13`, and separately its bundled corepack
+  has npm-registry signing keys that go stale over time independent of network reachability —
+  see the Dockerfiles for the full rationale), pnpm installed directly via `npm install -g
+  pnpm@11.9.0` (bypassing corepack's signature-verification path), `pnpm install
+  --frozen-lockfile`, `pnpm --filter @flash/<app>... build`, then a runtime stage running as
   a non-root `node` user with `NODE_ENV=production`. `web.Dockerfile` runtime stage is `nginx:1.27-alpine`
   serving `/usr/share/nginx/html` with `infra/web.nginx.conf` (SPA fallback `try_files $uri /index.html`).
 - Compose file must pass `docker compose -f infra/docker-compose.yml config` — **but do not run docker in Phase 0**

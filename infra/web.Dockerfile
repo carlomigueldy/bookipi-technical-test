@@ -4,8 +4,14 @@
 # Build context is the repo ROOT (see infra/docker-compose.yml: build.context = "..")
 # so the pnpm workspace (root manifests + all workspace package.json files) is visible.
 
-FROM node:22.11-alpine AS base
-RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
+# node:22.11-alpine's Node.js (v22.11.0) is below pnpm@11.9.0's minimum supported Node
+# (>=22.13), and separately its bundled corepack has npm-registry signing keys that go
+# stale over time ("Cannot find matching keyid") independent of network/registry
+# reachability. 22.14-alpine clears the engine floor; installing pnpm directly via npm
+# (below) sidesteps corepack's signature-verification path entirely, which is more robust
+# for a cold build months from now than re-upgrading corepack in place.
+FROM node:22.14-alpine AS base
+RUN npm install -g pnpm@11.9.0
 WORKDIR /app
 
 # ---- deps: resolve the whole workspace graph; cached while manifests are unchanged ----

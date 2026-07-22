@@ -89,6 +89,34 @@ jobs:
           key: ${{ runner.os }}-turbo-${{ github.sha }}
       - name: Build
         run: pnpm build
+      - name: Assert build artifacts exist
+        run: |
+          set -euo pipefail
+          for f in apps/api/dist/main.js apps/worker/dist/main.js packages/shared/dist/index.js; do
+            test -s "$f" || { echo "::error::missing or empty build artifact: $f"; exit 1; }
+          done
+          node -e "require('./packages/shared/dist/index.js')"
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Dependency audit (PRD §10)
+        # High/critical advisories fail the build. Registry outages are ignored so an
+        # unrelated infra blip cannot block an unrelated PR (anti-flakiness, not a
+        # loophole for real findings). Unfixable transitive advisories must be handled
+        # via an explicit, expiring entry in `pnpm-workspace.yaml` under
+        # `auditConfig.ignoreGhsas` (format: GHSA id + package + reason + review-by
+        # date + owner) — never by deleting this step. pnpm 11 no longer reads the
+        # legacy `pnpm` field in package.json for this setting.
+        run: pnpm audit --audit-level high --ignore-registry-errors
 
   integration:
     needs: [typecheck, unit]
