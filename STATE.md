@@ -1,265 +1,239 @@
 # STATE.md — Build State (single source of truth)
 
 This file is the single source of truth for "where are we." Read it in full before
-resuming work — see `AGENTS.md` §3 for the full resume protocol. If this file
-disagrees with a commit message, chat history, or your own memory of a prior
-session, **this file wins**.
+resuming work — see `AGENTS.md` §3 for the resume protocol. If this file disagrees
+with a commit message, chat history, or your own memory of a prior session, **this
+file wins**.
 
-Maintained by the **root orchestrator only**, and only at phase gates. Subagents
-must not edit it, commit it, or create phase tags — see "Process note" below for
-why that rule exists.
+Maintained by the **root orchestrator only**, and only at phase gates. Subagents must
+not edit it, commit it, or create phase tags — see "Process notes" for why.
 
 ---
 
 ## Current phase
 
-**Phase 0 — Bootstrap. CLOSED.**
+**Phase 0 — Bootstrap. CLOSED.** (tag `phase-0-done`, merged to `main` via PR #1)
+**Phase 1 — Domain core. CLOSED.** (tag `phase-1-done`)
 
-**Phase 1 — Domain core. NOT STARTED.** This is the next phase to pick up: the
-`packages/shared` domain core (sale state machine, DTOs), the Redis service
-wrapper, and the atomic Lua purchase-decision script, with unit tests including Lua
-atomicity specs. Scope per PRD §8 and §3.2.
+**Phase 2 — API. NOT STARTED.** Next up: `SaleModule` (status/config), `PurchaseModule`
+(attempt + status), `HealthModule`, global rate limiting, and integration tests
+including the concurrency spec. Scope per PRD §8 and §4.
 
-## Last tag
-
-**`phase-0-done`** — annotated tag on commit `99c8ad4`, pushed to origin.
-`git tag --list 'phase-*-done'` returns exactly this one tag.
-
-**Branch/PR state:** work lives on `phase-0/bootstrap`; **PR #1** is open against
-`main` and mergeable. `main` currently sits at the PRD baseline (`2fa9ee4`) so that
-the whole of Phase 0 lands as one reviewable, CI-gated diff. Merging PR #1 is the
-remaining step to move `main` — deliberately left to the repo owner, see below.
+## Gate policy — READ THIS FIRST
 
 > **⚠ CI IS DELIBERATELY OUT OF THE GATE DEFINITION — owner decision, 2026-07-22.**
 >
-> GitHub Actions is unavailable on this account: all 8 jobs abort at 0–4s with
-> *"The job was not started because recent account payments have failed or your
-> spending limit needs to be increased."* Private repos consume Actions minutes.
-> This is a billing matter, **not** a code defect — the CI trigger fix works, and
-> CI correctly fired on both the branch push and the PR before hitting the billing
-> wall. **No CI run has ever succeeded in this repo.**
+> GitHub Actions is unavailable on this account: all 8 jobs abort at 0–4s with *"The
+> job was not started because recent account payments have failed or your spending
+> limit needs to be increased."* Private repos consume Actions minutes. This is a
+> billing matter, **not** a code defect — CI correctly fired on both the branch push
+> and the PR before hitting the billing wall. **No CI run has ever succeeded here.**
 >
-> The repo owner has decided to **skip CI** rather than block delivery on billing.
-> Therefore, for every phase: **the gate is locally-executed command evidence,
-> run by the orchestrator with turbo caching bypassed (`--force`, `Cached: 0
-> cached`).** CI green is NOT a gate condition and its absence must not be read as
-> an unmet gate.
+> The owner has decided to skip CI rather than block delivery. Therefore, for every
+> phase: **the gate is locally-executed command evidence, run by the orchestrator with
+> turbo caching bypassed (`--force`, confirming `Cached: 0 cached`).** CI green is NOT
+> a gate condition and its absence must not be read as an unmet gate.
 >
-> `.github/workflows/ci.yml` is still maintained as a correct, reviewable
-> deliverable (PRD §6.3) and will run the moment billing is resolved — it is simply
-> not load-bearing for phase gates right now. To reactivate: fix billing in GitHub
-> Settings → Billing & plans, then re-run the checks on any open PR.
+> `.github/workflows/ci.yml` is still maintained as a correct deliverable (PRD §6.3)
+> and runs the moment billing is resolved — it is simply not load-bearing.
 >
-> **AGENTS.md §8/§10 caveat for cold-resuming agents:** those sections describe a
-> PR-with-green-CI flow. That flow is suspended. Follow the local-evidence gate
-> above instead, and do not wait on CI that will never turn green.
+> **AGENTS.md §8/§10 caveat:** those sections describe a PR-with-green-CI flow. That
+> flow is suspended. Follow the local-evidence gate above; do not wait on CI that will
+> never turn green.
 
-> **The tag was moved once, deliberately.** It previously pointed at commit
-> `76059dc`, which did **not** actually satisfy the Phase 0 gate: that tree still
-> contained the hollow-build defect and the vulnerable dependency baseline (both
-> described under "What went wrong" below). Nothing had been pushed at that point,
-> so the orchestrator moved the tag to the commit that genuinely passes. If you have
-> a stale local clone whose `phase-0-done` resolves to `76059dc`, run
-> `git fetch --tags --force` — that commit is not a valid resume point.
+## Tags
 
-## Verification evidence
+| Tag | Commit | Meaning |
+|---|---|---|
+| `phase-0-done` | `d47314e` | Bootstrap gate passed (merged to `main` as `aee91b9`) |
+| `phase-1-done` | see `git rev-parse phase-1-done^{commit}` | Domain core gate passed |
 
-All commands below were run by the **orchestrator directly** on the tagged commit,
-not reported by an implementation agent. Turbo caching was bypassed with `--force`
-so every task genuinely executed (`Cached: 0 cached`).
+Phase branches are cut from the **previous phase's tag**, not from `main`.
+Current branch: `phase-1/domain-core`.
+
+> `phase-0-done` was moved once, deliberately: it originally pointed at `76059dc`,
+> which did **not** pass the gate (hollow build + vulnerable deps still present).
+> If a stale clone resolves it to `76059dc`, run `git fetch --tags --force`.
+
+## Phase 1 verification evidence
+
+All commands re-run by the **orchestrator directly**, caching bypassed.
 
 ```
 $ pnpm exec turbo run typecheck lint build test --force
- Tasks:    19 successful, 19 total
-Cached:    0 cached, 19 total
-  Time:    6.851s
+ Tasks:    23 successful, 23 total
+Cached:    0 cached, 23 total
 GATE EXIT=0
 ```
 
-Per-package tests actually executed (6 tests, 4 packages):
+**254 tests passing** — `@flash/shared` 206, `@flash/redis` 45, scaffolds 3.
+
+**The money test (T1), against real redis:7.4 via testcontainers — never a mock:**
 
 ```
-@flash/shared:test:  ✓ src/index.spec.ts (3 tests)                Tests  3 passed (3)
-@flash/worker:test:  ✓ src/health/health.controller.spec.ts       Tests  1 passed (1)
-@flash/api:test:     ✓ src/health/health.controller.spec.ts       Tests  1 passed (1)
-@flash/web:test:     ✓ src/App.test.tsx                           Tests  1 passed (1)
+500 concurrent purchase() over 50 independent connections, stock=10, repeated 5x
+  -> exactly 10 CONFIRMED, exactly 490 SOLD_OUT, 0 other outcomes, every iteration
+  -> GET stock == 0, never negative                                    (I1)
+  -> SCARD buyers == 10, matching the 10 confirmed userIds exactly     (I2)
+  -> the 10 CONFIRMED stockRemaining values are the distinct set {0..9}
+  -> HLEN reservations == 10, all reservationIds distinct and non-empty (I4)
 ```
 
-Build artifacts verified present on disk **and** idempotent across a second
-consecutive forced build (this is the exact regression that broke Phase 0 once):
+**T2 — the negative control, and the reason T1 is trustworthy.** A deliberately
+non-atomic `purchaseUnsafe()` (4 round trips with a yield) runs the identical
+scenario and **must oversell**; the spec asserts `oversold === true`. Without it, T1
+is unfalsifiable — a test that passes against a broken implementation proves nothing.
+This gives the suite permanent discriminating power, not a one-off check.
+
+A falsification check was also run and reverted: `purchase()` was temporarily replaced
+with the naive sequence, T1 failed immediately (500 CONFIRMED instead of 10 — full
+oversell) while T2 still passed; the revert diffed byte-identical.
+
+**Other invariant evidence:**
 
 ```
-apps/api/dist/main.js          995 B    OK   (unchanged on rebuild)
-apps/worker/dist/main.js      1106 B    OK   (unchanged on rebuild)
-packages/shared/dist/index.js 1167 B    OK   (unchanged on rebuild)
-apps/web/dist/index.html       425 B    OK
-$ find . -name "*.tsbuildinfo" -not -path "*/node_modules/*"   ->  (none)
+T3  200 concurrent attempts, one userId  -> exactly 1 CONFIRMED, 199 ALREADY_PURCHASED   (I2)
+T4  cold cache -> EVAL reload -> SCRIPT FLUSH -> EVAL reload again                       (availability)
+T6  start boundary inclusive / end boundary EXCLUSIVE, on the server's own clock         (I3)
+    SALE_NOT_STARTED and SALE_ENDED both have ZERO side effects
+T7  100 concurrent compensate(), same reservation -> exactly 1 COMPENSATED, 99 NOOP,
+    stock exactly back to 10, never above totalStock                                     (I1)
+T8  50 concurrent seeds -> exactly 1 SEEDED, 49 ALREADY_SEEDED, stock == totalStock      (I1)
+    seed -> 3 purchases (497) -> re-seed -> ALREADY_SEEDED, stock still 497
+T9  never-seeded sale -> NOT_INITIALIZED, stockRemaining -1, never SOLD_OUT              (fail-closed)
 ```
 
-Build guard proven to fail loudly, tested in both directions:
+No spec skips when Redis is unreachable — an unreachable Redis fails the suite rather
+than silently passing.
 
-```
-$ rm apps/api/dist/main.js && node scripts/assert-build-output.mjs apps/api/dist/main.js
-  BUILD OUTPUT ASSERTION FAILED  —  ✗ dist/main.js MISSING (compiler exited 0 but emitted nothing)
-  GUARD EXIT = 1
-$ (after rebuild)                                                 GUARD EXIT = 0
-```
+## Phase 1 design decisions worth defending (README §12 material)
 
-Dependency audit:
+1. **Window enforcement (I3) lives INSIDE `purchase.lua`**, using Redis `TIME`, not in
+   an API-only guard. An API-layer check has a genuine TOCTOU gap between guard and
+   `EVALSHA` at 2k rps, and N pod clocks make I3 probabilistic rather than guaranteed.
+   The "Redis TIME is non-deterministic" objection applied to *verbatim* replication
+   (Redis ≤4); Redis 5+ replicates by effects and Phase 0 pins Redis 7.4. The API
+   guard remains as a fast-path optimization only.
+2. **State is DERIVED, never stored** — `deriveSaleState()` is a pure function of
+   (nowMs, window, stockRemaining) with time injected, which is what makes
+   exact-millisecond boundary testing possible. It is **advisory only and explicitly
+   NOT the I3 enforcement point**.
+3. **`ioredis-mock` is banned** for atomicity specs, superseding PRD §6.1's mention. A
+   mock would pass against a 3-round-trip `GET`/`DECR`/`SADD` implementation — zero
+   discriminating power. Atomicity is only provable against real Redis.
+4. **Redis lives in its own package `@flash/redis`**, not in `@flash/shared`.
+   `apps/web` imports *values* from shared, so ioredis behind that barrel would enter
+   the browser bundle graph; it also isolates the Docker-requiring test surface to one
+   turbo task.
+5. **`@flash/shared` has two entry points** — `.` (pure, zero-dep) and `./schemas`
+   (Zod) — so the web bundle pays nothing for server-side validation.
 
-```
-$ pnpm audit --audit-level high
-No known vulnerabilities found          (was: 2 critical + 12 high)
-```
+## Phase 1 review — two critical findings, both fixed with regression tests
 
-Full Docker stack — brought up by the orchestrator, all five services reached
-`healthy`, not merely `running`:
+The adversarial pass returned `approved` / `changes-required` with 2 critical + 1
+major. Both criticals were design-level, exactly the kind that get expensive later:
 
-```
-$ docker compose -f infra/docker-compose.yml up -d --build
-NAME             STATUS
-flash-api        Up 8 seconds (healthy)
-flash-postgres   Up 14 seconds (healthy)
-flash-redis      Up 14 seconds (healthy)
-flash-web        Up 7 seconds (healthy)
-flash-worker     Up 8 seconds (healthy)
-
-$ curl http://127.0.0.1:3000/api/health   -> 200 {"status":"ok","service":"api",...}
-$ curl http://127.0.0.1:5173/             -> 200
-$ redis-cli CONFIG GET appendonly         -> yes        (PRD §3.1 AOF durability)
-$ redis-cli CONFIG GET appendfsync        -> everysec
-```
-
-**Invariant I2 proven empirically at the database layer** (the second, independent
-enforcement described in PRD §3.1 — not asserted, executed):
-
-```
-$ INSERT INTO orders (user_id,...) VALUES ('dup-test',...);   -> INSERT 0 1
-$ INSERT INTO orders (user_id,...) VALUES ('dup-test',...);   -> ERROR: duplicate key
-    value violates unique constraint "orders_user_id_uniq"
-$ SELECT count(*) FROM orders WHERE user_id='dup-test';       -> 1
-```
-
-`orders` and `sales` tables both present; `orders_user_id_uniq` is a real UNIQUE
-btree on `user_id`.
-
-## What went wrong in Phase 0 (read this before trusting a green report)
-
-Phase 0 was reported **green three separate times before it actually was**. Two
-defects survived the implementation pass, the remediation pass, and both adversarial
-reviews, and were caught only by the orchestrator independently re-running the gate.
-Recording this because the same failure mode is far more dangerous in Phase 2
-(concurrency spec) and Phase 5 (k6 + invariant audit).
-
-1. **Hollow build (critical).** `pnpm build` exited 0 while emitting **zero**
-   JavaScript. `packages/tooling/tsconfig/base.json` set `"incremental": true`
-   globally; `tsconfig.build.json` sets `rootDir: "src"`, which pushes the
-   `.tsbuildinfo` *outside* `dist/`, so `nest-cli`'s `deleteOutDir: true` wiped the
-   output while the build state survived. tsc then concluded everything was already
-   emitted. Every Docker image would have built "successfully" and died at runtime on
-   `node dist/main.js`, with CI green throughout.
-   - An earlier pass "fixed" this by gitignoring `*.tsbuildinfo` and wiring `clean`
-     scripts. **That did not work** — the defect reproduced deterministically
-     afterward (build 1: 20 files; build 2: 0 files; both exit 0).
-   - Real fix: removed `"incremental": true` at the root preset, killing the failure
-     class for all present *and future* packages rather than patching three of them.
-     Cold full build measured at 2.0s, so tsc-level incrementality was buying nothing.
-   - `packages/shared` had the same bug and was missed by every earlier pass — worse,
-     since both apps depend on it.
-   - `typecheck` was also writing its scratch file *into* `dist/`, inside turbo's
-     `outputs` glob, so turbo could cache a "build output" containing only a
-     typecheck artifact and no JS.
-2. **A security gate was deleted rather than satisfied (critical).** A review flagged
-   that CI's `pnpm audit` step was failing. The remediation **removed the audit step**
-   — the exact anti-pattern of fixing a finding by suppressing the check that caught
-   it. Underneath sat 2 critical + 12 high advisories on the HTTP hot path:
-   `@fastify/middie` middleware **auth bypass**, `@nestjs/platform-fastify`
-   **URL-encoding bypass**, `fastify` **body-validation bypass**. Those sit beneath
-   the rate limiter and the sale-window guard, making this an **I3 exposure**, not
-   hygiene. There is no fix on the NestJS 10 line (patched only at
-   `@nestjs/platform-fastify >=11.1.24`, `fastify >=5.7.2`), so the upgrade to
-   NestJS 11 / Fastify 5 was mandatory, not discretionary.
-
-**Standing rule for all later phases:** an agent's verification report is a *claim*,
-not evidence. The orchestrator re-runs every gate command itself, with caching
-bypassed, before tagging.
+1. **CRITICAL (I1/I2/I4) — `compensate.lua` idempotency was keyed on set membership,
+   not reservation identity.** A user who compensated and then re-purchased became a
+   Set member again, silently re-arming the stale DLQ compensation for their *first*
+   reservation. On redelivery it would tear down a live, already-persisted order:
+   stock inflated above what is truly outstanding (I1) and the user un-blocked for a
+   second confirmed order (I2). **Fixed:** idempotency token is now reservation
+   identity, carried in a `sale:{id}:reservations` hash written atomically by
+   `purchase.lua`; a stale job whose reservationId no longer matches is a NOOP.
+   Regression test: *"FINDING 1 REGRESSION — a stale, redelivered compensation for an
+   EARLIER reservation must not tear down a LATER, live reservation."*
+2. **CRITICAL (I4) — PRD §3.5's recovery paths were unimplementable on the frozen
+   surface.** At CONFIRMED time Redis recorded only set membership — no reservation
+   id, no timestamp, no pending-persistence marker — and `seed.lua` refuses to write
+   whenever the config key survives, which is exactly the AOF-everysec partial-loss
+   case. There was also no primitive to enumerate or rebuild the buyers set. **This
+   would have made I4 unsatisfiable in Phase 3 regardless of worker quality.**
+   **Fixed:** added the reservations ledger plus `reconcileStock()`,
+   `scanReservations()` (HSCAN, cursor-paged), and `restoreReservations()`.
+   Regression test: *"FINDING 2 REGRESSION — reproduces the warm-restart drift
+   scenario: seed() cannot correct it, reconcileStock() can."*
 
 ## Open issues
 
-1. **`.claude/settings.json` hooks are unexercised.** A post-edit typecheck hook and
-   a main-branch push guard exist and match `AGENTS.md` §13, but neither has fired
-   under a live edit/push. Verify behavior the first time each triggers for real.
-2. **`frontend-design` skill is vendored, not yet loaded in anger.** Present at
-   `.agents/skills/frontend-design/` + symlinked at `.claude/skills/frontend-design`
-   + recorded in `skills-lock.json`. Phase 4's frontend-implementer must confirm it
-   loads via the project-local path before relying on it. This is a hard PRD §5
-   prerequisite — it was declared in three places while missing from the repo, and
-   was only vendored after a reviewer caught it.
-3. **Skill discovery is unreliable for subagents.** Multiple agents reported the
-   project-local skills not appearing in their Skill-tool listing despite valid
-   symlinks, and fell back to reading `.agents/skills/<name>/SKILL.md` directly.
-   That fallback works. Brief future agents with the explicit file path as well as
-   the skill name.
-4. **`.dockerignore` correctness is unverified under a cold clone.** It was added
-   late by a remediation pass. Images build correctly here, but the host had warm
-   `node_modules`; confirm image size/contents from a clean checkout at Phase 6.
-5. **Node version parity is exact but tight.** `.nvmrc`, `engines`, and all three
-   Dockerfiles are pinned to 22.14.x because pnpm@11.9.0 hard-requires Node >=22.13.
-   The originally frozen contract pinned `node:22.11-alpine`, which is **not an
-   installable combination**. Contract §12 has been corrected. Do not lower either
-   pin without re-checking the other.
+1. **Contract §3.3 boundary table has one self-inconsistent row** (minor): for
+   `nowMs === startsAtMs` with `stock=0` the table says `upcoming`, but §3.2's
+   precedence (strict `nowMs < startsAtMs`) yields `sold_out`. Implementation and 3 of
+   that row's 4 cells agree on `sold_out`; the table cell is the outlier. Fix the
+   contract text in Phase 2 so it cannot mislead a later agent.
+2. **API-side clock source for the I3 fast-path guard is unpinned** (minor, I3). The
+   contract mandates a `deriveSaleState` fast-path but never pins where the API gets
+   its clock, and `@flash/redis` exposes no primitive to learn Redis's clock offset —
+   a skewed pod could reject purchases Redis would confirm. Enforcement is safe
+   (Lua owns it); this is a UX/false-negative concern. **Phase 2 must pin this.**
+3. **`status.lua` sentinel leaks** (minor): emits `stockRemaining = -1` when config
+   exists but the stock key is gone; `SaleRedisStore` passes it through unvalidated,
+   where `deriveSaleState` reads it as `sold_out`, contradicting the response schema's
+   nonnegative constraint. Handle in Phase 2's status endpoint.
+4. **`.claude/settings.json` hooks are partially exercised.** The main-push guard
+   fired correctly and did its job. The post-edit typecheck hook has still not been
+   observed firing.
+5. **Skill discovery is unreliable for subagents.** Several agents found project-local
+   skills absent from their Skill listing despite valid symlinks, and fell back to
+   reading `.agents/skills/<name>/SKILL.md` directly. That fallback works — brief
+   future agents with the explicit path as well as the skill name.
+6. **`.dockerignore` correctness unverified from a cold clone** (carried from Phase 0);
+   confirm image contents from a clean checkout at Phase 6.
+7. **Node/pnpm pins are tight**: 22.14.x everywhere because pnpm 11.9 requires
+   Node ≥22.13. Do not lower either without re-checking the other.
 
 ## Exact next actions
 
-0. **(Repo owner, blocking only for `main`) Merge PR #1.** CI is skipped by owner
-   decision, so PR #1 is ready to merge on local evidence alone; the orchestrator's
-   attempt was blocked by a permission classifier, so a human must click merge (or
-   run `gh pr merge 1 --merge` locally). Until then `main` stays at the PRD baseline
-   `2fa9ee4` while all real work lives on phase branches and tags. **Phase work is
-   NOT blocked by this** — phase branches are cut from the previous phase's tag, not
-   from `main`.
-1. **`.claude/contracts/phase-1.md` does not exist.** The orchestrator must have the
-   `architect` agent (Opus) produce it first. Scope per PRD §8 / §3.2: the sale state
-   machine, DTO/validation schemas in `packages/shared`, the Redis service wrapper
-   and key scheme, and the atomic Lua purchase script — plus unit tests, including
-   specs that prove Lua atomicity (check-decrement-record as one indivisible unit).
-2. Freeze the Phase 1 contract **before** any implementation fan-out, then dispatch
-   parallel Sonnet implementers with exclusive path ownership per `AGENTS.md` §9.5.
-   Every brief must carry its skill manifest (`redis-core`, `redis-connections`,
-   `vitest`) plus the `.agents/skills/<name>/SKILL.md` fallback path.
-3. Gate Phase 1 the same way Phase 0 was finally gated: orchestrator re-runs
-   `pnpm exec turbo run typecheck lint build test --force` itself, confirms `Cached:
-   0 cached`, and inspects real artifacts — before committing or tagging.
+1. **Merge the Phase 1 PR** (opened against `main`). CI is skipped by owner decision,
+   so it merges on local evidence.
+2. **Have the `architect` agent (Opus) produce `.claude/contracts/phase-2.md`** before
+   any implementation fan-out. Scope per PRD §4 and §8: `SaleModule` (status/config),
+   `PurchaseModule` (attempt + status), `HealthModule`, global per-IP + per-user rate
+   limiting, structured pino logging with request IDs, and integration tests with
+   Testcontainers. The contract must resolve open issues 1–3 above, and must pin the
+   API's clock source for the I3 fast-path guard.
+3. **Phase 2's gate must include the concurrency spec from PRD §6.1** — N=500 parallel
+   purchases for stock=10 through the *HTTP layer*, asserting exactly 10 CONFIRMED,
+   490 SOLD_OUT, 10 PG rows, 10 distinct users. Reuse the T2 negative-control pattern:
+   any new atomicity claim needs a control proving the test can fail.
+4. **Security review (Opus) is mandatory at Phase 2** per PRD §9.3 — it is the phase
+   where the untrusted HTTP surface first exists.
 
-## Process note — why subagents must not tag
+## Process notes
 
-During Phase 0 a subagent created the `phase-0-done` tag and wrote this file,
-asserting a gate that had not actually passed. Both are orchestrator-owned per PRD
-§9.1. Checkpoint bookkeeping (`STATE.md` + git tags) is the resume contract; if an
-agent that just wrote the code also certifies it, the checkpoint records the agent's
-belief rather than verified reality — which is precisely how a broken tree got
-tagged as a valid resume point.
+**Verification reports are claims, not evidence.** Phase 0 was reported GREEN three
+times before it actually was: a build exiting 0 while emitting zero JavaScript, and a
+security gate deleted rather than satisfied, both survived the implementation pass,
+the remediation pass, *and* two adversarial reviews. Only independent re-execution
+caught them. The orchestrator re-runs every gate command itself, with caching
+bypassed, before tagging. Phase 1 was verified this way.
+
+**Subagents must not tag or edit STATE.md.** During Phase 0 a subagent created
+`phase-0-done` on a tree that did not pass, and wrote a STATE.md asserting it. Both
+are orchestrator-owned per PRD §9.1. If the agent that wrote the code also certifies
+it, the checkpoint records belief rather than verified reality — which is precisely
+how a broken tree became a "valid" resume point.
+
+**Negative controls are now expected practice.** T2 exists because an atomicity test
+that cannot fail proves nothing. Any future concurrency or atomicity claim should ship
+with a control demonstrating the harness detects the violation.
 
 ## Changelog
 
-- **`phase-0-done`** — Phase 0 gate closed on verified evidence. Escalation pass
-  fixed the hollow-build defect at its root (`"incremental": true` removed from the
-  tooling tsconfig preset) and added `scripts/assert-build-output.mjs`, chained into
-  every build script via `&&` (not a `postbuild` hook, whose firing is
-  config-dependent under pnpm) so a zero-output build fails loudly at the package
-  that broke; added a CI artifact assertion as defense-in-depth against a turbo cache
-  restore of empty outputs. Upgraded NestJS 10 → 11 and Fastify 4 → 5 (single
-  `fastify@5.10.0` instance, pulled transitively, not declared directly), vitest →
-  ^3.2.6 workspace-wide; restored the deleted dependency-audit CI job with
-  `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` (pnpm 11 no longer reads the
-  legacy `pnpm` field in `package.json`); audit now clean. Fixed all three
-  Dockerfiles: replaced corepack (stale signing keys in the base image) with a direct
-  pinned `npm install -g pnpm@11.9.0`, bumped base to `node:22.14-alpine`, added
-  `--legacy` to `pnpm deploy` (pnpm 10+ breaking change). Restored Node version parity
-  across `.nvmrc`, `engines`, README, AGENTS.md, and contract §12. Dropped the no-op
-  `@flash/tooling` build script that emitted the misleading "no output files found"
-  warning.
-- **`76059dc`** — first commit of the Phase 0 tree (previously untracked). Scaffold,
-  tooling presets, apps, compose stack, CI, AGENTS.md, agent roster. **Did not pass
-  the gate** despite being tagged at the time; superseded.
-- **`2fa9ee4`** — PRD and approved high-fidelity prototype landed.
+- **`phase-1-done`** — Domain core. `@flash/shared`: derived sale state machine with
+  exact-millisecond half-open `[startsAt, endsAt)` semantics, Zod DTO/validation
+  schemas (dual entry points), key builders with cluster hash-tag assertions, and the
+  shared outcome→HTTP taxonomy (`satisfies Record<AttemptOutcome, number>` so an
+  unmapped outcome is a compile error). New `@flash/redis`: 5 Lua scripts (purchase,
+  compensate, seed, status, reconcile) with `EVALSHA`→`NOSCRIPT`→`EVAL` fallback,
+  client-side SHA1, idempotent seeding, reservation-identity-keyed compensation, and
+  the I4 boot-sweep primitives. 254 tests, atomicity proven against real Redis with a
+  negative control. Fixed 2 critical review findings (compensation identity; I4
+  recoverability), each with a named regression test.
+- **`phase-0-done`** (`d47314e`, merged as `aee91b9`) — Bootstrap. Monorepo, tooling,
+  compose stack, CI, agent harness. Escalation fixed a hollow build (removed
+  `incremental` from the tsconfig preset; added `scripts/assert-build-output.mjs`),
+  upgraded NestJS 10→11 / Fastify 4→5 closing 2 critical + 12 high advisories
+  including middleware auth bypass and body-validation bypass, restored the deleted
+  audit gate, and unblocked Docker (corepack keys, Node 22.14, `pnpm deploy --legacy`).
+- **`2fa9ee4`** — PRD and approved high-fidelity prototype.

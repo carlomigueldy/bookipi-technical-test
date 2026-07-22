@@ -1,5 +1,5 @@
 {
-  "name": "@flash/shared",
+  "name": "@flash/redis",
   "version": "0.0.0",
   "private": true,
   "main": "./dist/index.js",
@@ -8,27 +8,23 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./schemas": {
-      "types": "./dist/schemas.d.ts",
-      "default": "./dist/schemas.js"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/assert-build-output.mjs dist/index.js dist/index.d.ts dist/schemas.js dist/schemas.d.ts",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/assert-build-output.mjs dist/index.js dist/index.d.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "@flash/shared": "workspace:*",
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "@flash/tooling": "workspace:*",
+    "@testcontainers/redis": "^12.0.4",
     "@types/node": "^22.10.2",
     "eslint": "^9.17.0",
     "typescript": "^5.7.2",

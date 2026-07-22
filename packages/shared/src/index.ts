@@ -5,9 +5,94 @@
 // `export { X } from` uses an `Object.defineProperty` getter that the bundler's
 // analysis does not follow). A plain local import + export compiles to a
 // simple, statically analyzable `exports.X = mod.X;` assignment instead.
-import { SERVICE_NAMES, API_GLOBAL_PREFIX, HEALTH_PATH } from './constants';
+import {
+  SERVICE_NAMES,
+  API_GLOBAL_PREFIX,
+  HEALTH_PATH,
+  USER_ID_MIN_LENGTH,
+  USER_ID_MAX_LENGTH,
+  USER_ID_PATTERN,
+} from './constants';
 import type { ServiceName } from './constants';
 import type { HealthStatus, HealthResponse } from './health';
+import {
+  SALE_ID_PATTERN,
+  assertSaleId,
+  saleHashTag,
+  saleConfigKey,
+  saleStockKey,
+  saleBuyersKey,
+  saleMetricsKey,
+  saleReservationsKey,
+  saleKeys,
+} from './keys';
+import type { SaleKeys } from './keys';
+import {
+  SALE_STATES,
+  deriveSaleState,
+  isWithinSaleWindow,
+  msUntilNextTransition,
+} from './sale-state';
+import type { SaleState, SaleStateInput } from './sale-state';
+import {
+  PURCHASE_OUTCOMES,
+  REQUEST_OUTCOMES,
+  ATTEMPT_OUTCOMES,
+  ORDER_STATUSES,
+  PURCHASE_OUTCOME_HTTP_STATUS,
+  SALE_NOT_ACTIVE_OUTCOMES,
+  isSuccessOutcome,
+  SALE_METRIC_FIELDS,
+  OUTCOME_METRIC_FIELD,
+} from './results';
+import type {
+  PurchaseOutcome,
+  RequestOutcome,
+  AttemptOutcome,
+  OrderStatus,
+  SaleMetricField,
+} from './results';
 
-export { SERVICE_NAMES, API_GLOBAL_PREFIX, HEALTH_PATH };
-export type { ServiceName, HealthStatus, HealthResponse };
+export {
+  SERVICE_NAMES,
+  API_GLOBAL_PREFIX,
+  HEALTH_PATH,
+  USER_ID_MIN_LENGTH,
+  USER_ID_MAX_LENGTH,
+  USER_ID_PATTERN,
+  SALE_ID_PATTERN,
+  assertSaleId,
+  saleHashTag,
+  saleConfigKey,
+  saleStockKey,
+  saleBuyersKey,
+  saleMetricsKey,
+  saleReservationsKey,
+  saleKeys,
+  SALE_STATES,
+  deriveSaleState,
+  isWithinSaleWindow,
+  msUntilNextTransition,
+  PURCHASE_OUTCOMES,
+  REQUEST_OUTCOMES,
+  ATTEMPT_OUTCOMES,
+  ORDER_STATUSES,
+  PURCHASE_OUTCOME_HTTP_STATUS,
+  SALE_NOT_ACTIVE_OUTCOMES,
+  isSuccessOutcome,
+  SALE_METRIC_FIELDS,
+  OUTCOME_METRIC_FIELD,
+};
+export type {
+  ServiceName,
+  HealthStatus,
+  HealthResponse,
+  SaleKeys,
+  SaleState,
+  SaleStateInput,
+  PurchaseOutcome,
+  RequestOutcome,
+  AttemptOutcome,
+  OrderStatus,
+  SaleMetricField,
+};

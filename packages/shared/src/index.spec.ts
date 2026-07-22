@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { API_GLOBAL_PREFIX, HEALTH_PATH, SERVICE_NAMES } from './index';
-import type { HealthResponse } from './index';
+import {
+  API_GLOBAL_PREFIX,
+  ATTEMPT_OUTCOMES,
+  HEALTH_PATH,
+  OUTCOME_METRIC_FIELD,
+  PURCHASE_OUTCOME_HTTP_STATUS,
+  SALE_STATES,
+  SERVICE_NAMES,
+  USER_ID_MAX_LENGTH,
+  USER_ID_MIN_LENGTH,
+  USER_ID_PATTERN,
+  assertSaleId,
+  deriveSaleState,
+  isWithinSaleWindow,
+  saleKeys,
+} from './index';
+import type { HealthResponse, SaleState } from './index';
 
 describe('@flash/shared barrel exports', () => {
   it('exposes the frozen service name list', () => {
@@ -21,5 +36,41 @@ describe('@flash/shared barrel exports', () => {
     };
 
     expect(sample.status).toBe('ok');
+  });
+
+  it('exposes the userId validation constants (single source for SLICE 2)', () => {
+    expect(USER_ID_MIN_LENGTH).toBe(3);
+    expect(USER_ID_MAX_LENGTH).toBe(64);
+    expect(USER_ID_PATTERN.test('valid.user-1@x')).toBe(true);
+    expect(USER_ID_PATTERN.test('bad user')).toBe(false);
+  });
+
+  it('re-exports the key builders and assertSaleId, wired correctly through the barrel', () => {
+    expect(saleKeys('flash-2026')).toEqual({
+      config: 'sale:{flash-2026}:config',
+      stock: 'sale:{flash-2026}:stock',
+      buyers: 'sale:{flash-2026}:buyers',
+      metrics: 'sale:{flash-2026}:metrics',
+      reservations: 'sale:{flash-2026}:reservations',
+    });
+    expect(() => assertSaleId('has{brace')).toThrow(TypeError);
+  });
+
+  it('re-exports the sale state machine, wired correctly through the barrel', () => {
+    expect(SALE_STATES).toEqual(['upcoming', 'active', 'sold_out', 'ended']);
+    const state: SaleState = deriveSaleState({
+      nowMs: 1_500,
+      startsAtMs: 1_000,
+      endsAtMs: 2_000,
+      stockRemaining: 3,
+    });
+    expect(state).toBe('active');
+    expect(isWithinSaleWindow(1_500, 1_000, 2_000)).toBe(true);
+  });
+
+  it('re-exports the result/error taxonomy, wired correctly through the barrel', () => {
+    expect(ATTEMPT_OUTCOMES).toContain('CONFIRMED');
+    expect(PURCHASE_OUTCOME_HTTP_STATUS.CONFIRMED).toBe(201);
+    expect(OUTCOME_METRIC_FIELD.SOLD_OUT).toBe('sold_out');
   });
 });

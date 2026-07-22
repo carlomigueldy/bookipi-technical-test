@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/shared" },
+    { "path": "packages/redis" },
     { "path": "apps/api" },
     { "path": "apps/worker" },
     { "path": "apps/web" }

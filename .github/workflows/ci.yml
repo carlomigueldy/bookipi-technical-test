@@ -55,6 +55,22 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    # @flash/redis's Lua atomicity specs run against a real Redis 7.4 server
+    # (ioredis-mock is banned — see .claude/contracts/phase-1.md §6.1). This service
+    # container is used instead of testcontainers in CI for determinism and image-pull
+    # cost; testcontainers remains the local/no-REDIS_TEST_URL path.
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REDIS_TEST_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
