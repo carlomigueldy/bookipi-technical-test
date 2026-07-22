@@ -1,0 +1,11 @@
+dist
+node_modules
+.turbo
+pnpm-lock.yaml
+prototype
+coverage
+# Read-only / not-ours content that `--ignore-path .gitignore` doesn't cover
+# (these are tracked files, not build artifacts, so .gitignore doesn't list them):
+PRD.md
+.claude/contracts
+.agents

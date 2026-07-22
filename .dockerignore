@@ -1,0 +1,62 @@
+# Build context is the repo root for every Dockerfile in infra/ (context: ".."),
+# and each build stage does `COPY . .` — this file keeps that copy from pulling in
+# host-native artifacts (node_modules built for the host's libc/arch, stale dist/
+# and *.tsbuildinfo that would reproduce the incremental-build bug inside the image,
+# secrets, VCS metadata) that don't belong in an image build context.
+# Mirrors the scope of .gitignore / .prettierignore.
+
+# dependencies — reinstalled fresh (Alpine-native) in the deps stage
+node_modules/
+**/node_modules/
+
+# build outputs — rebuilt fresh in the build stage
+dist/
+**/dist/
+build/
+**/build/
+.turbo/
+**/.turbo/
+
+# TypeScript incremental build cache — same desync-with-deleteOutDir bug as in git
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# test coverage
+coverage/
+**/coverage/
+
+# environment files — never bake secrets into an image layer
+.env
+.env.*.local
+!.env.example
+
+# VCS / editor / OS
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# load-test artifacts
+load/k6/results/
+load/k6/*.summary.json
+k6-results.json
+k6-summary.json
+
+# not needed inside any image
+prototype/
+.claude/
+.agents/
+.claude/settings.local.json

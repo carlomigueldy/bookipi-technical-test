@@ -1,0 +1,59 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "stream",
+  "globalDependencies": [".env", "packages/tooling/**"],
+  "globalEnv": ["NODE_ENV"],
+  "globalPassThroughEnv": [
+    "API_HOST",
+    "API_PORT",
+    "WORKER_HEALTH_PORT",
+    "WEB_PORT",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "LOG_LEVEL",
+    "CORS_ORIGIN",
+    "SALE_ID",
+    "SALE_NAME",
+    "SALE_STARTS_AT",
+    "SALE_ENDS_AT",
+    "SALE_TOTAL_STOCK",
+    "RATE_LIMIT_MAX",
+    "RATE_LIMIT_WINDOW_MS",
+    "ORDERS_QUEUE_NAME",
+    "WORKER_CONCURRENCY",
+    "WORKER_MAX_ATTEMPTS",
+    "VITE_API_BASE_URL"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "lint": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"]
+    },
+    "test:integration": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "outputs": []
+    },
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
+    },
+    "clean": {
+      "cache": false,
+      "outputs": []
+    }
+  }
+}

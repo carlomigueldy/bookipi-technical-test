@@ -1,0 +1,17 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+allowBuilds:
+  '@nestjs/core': true
+  '@swc/core': true
+  esbuild: true
+overrides:
+  vite: ^6.0.5
+# PRD §10: dependency audit gate (.github/workflows/ci.yml `audit` job) runs
+# `pnpm audit --audit-level high`. Ship this list empty. Add an entry only for a
+# genuinely unfixable high/critical advisory, with a mandatory reason and review
+# date so the next suppression is a visible, reviewable diff — never delete the
+# audit step instead.
+# Format: GHSA-xxxx-xxxx-xxxx  # <pkg>: reason | Review by: YYYY-MM-DD | Owner: <name>
+auditConfig:
+  ignoreGhsas: []

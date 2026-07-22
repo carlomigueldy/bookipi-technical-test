@@ -1,0 +1,163 @@
+# Flash sale system — local Docker Compose stack.
+# Run from the repo root: `docker compose -f infra/docker-compose.yml up -d`
+#
+# No top-level `version:` key (obsolete in Compose v2). Build contexts are the repo
+# root (`context: ..`) so the pnpm workspace resolves. Every service has a real
+# healthcheck; api/worker/web wait on `service_healthy` for their datastores so
+# `docker compose up` converges deterministically instead of racing startup order.
+#
+# Environment values below mirror the frozen defaults in ../.env.example. They are
+# inlined with `${VAR:-default}` so this file is self-sufficient without a committed
+# .env — but a real .env at the repo root (docker compose's default project-directory
+# env file) still overrides any of them if present.
+
+networks:
+  flash-net:
+    name: flash-net
+
+volumes:
+  flash-pgdata:
+    name: flash-pgdata
+  flash-redisdata:
+    name: flash-redisdata
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: flash-redis
+    command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec']
+    restart: unless-stopped
+    networks:
+      - flash-net
+    ports:
+      - '6380:6379'
+    volumes:
+      - flash-redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: flash-postgres
+    restart: unless-stopped
+    networks:
+      - flash-net
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flash}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flash}
+      POSTGRES_DB: ${POSTGRES_DB:-flash}
+    volumes:
+      - flash-pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    container_name: flash-api
+    restart: unless-stopped
+    networks:
+      - flash-net
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      API_HOST: ${API_HOST:-0.0.0.0}
+      API_PORT: ${API_PORT:-3000}
+      CORS_ORIGIN: http://localhost:5173
+      DATABASE_URL: postgresql://flash:flash@postgres:5432/flash
+      REDIS_URL: redis://redis:6379
+      SALE_ID: ${SALE_ID:-flash-2026}
+      SALE_NAME: ${SALE_NAME:-Aurora — Founders Edition}
+      SALE_STARTS_AT: ${SALE_STARTS_AT:-2026-07-22T12:00:00.000Z}
+      SALE_ENDS_AT: ${SALE_ENDS_AT:-2026-07-22T13:00:00.000Z}
+      SALE_TOTAL_STOCK: ${SALE_TOTAL_STOCK:-500}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-20}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-1000}
+      ORDERS_QUEUE_NAME: ${ORDERS_QUEUE_NAME:-orders}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(''http://127.0.0.1:3000/api/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/worker.Dockerfile
+    container_name: flash-worker
+    restart: unless-stopped
+    networks:
+      - flash-net
+    ports:
+      - '3001:3001'
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKER_HEALTH_PORT: ${WORKER_HEALTH_PORT:-3001}
+      DATABASE_URL: postgresql://flash:flash@postgres:5432/flash
+      REDIS_URL: redis://redis:6379
+      SALE_ID: ${SALE_ID:-flash-2026}
+      ORDERS_QUEUE_NAME: ${ORDERS_QUEUE_NAME:-orders}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-16}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-5}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(''http://127.0.0.1:3001/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/web.Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:3000/api
+    container_name: flash-web
+    restart: unless-stopped
+    networks:
+      - flash-net
+    ports:
+      - '5173:80'
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1/ || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
