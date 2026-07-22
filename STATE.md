@@ -9,7 +9,9 @@ session, this file wins.
 
 ## Current phase
 
-**Phase 0 — Bootstrap.** In progress → closing out.
+**Phase 0 — Bootstrap. CLOSED.** Phase 1 (`packages/shared` domain core: state
+machine, DTOs, Redis service + Lua, unit tests) has **not** started — that is the
+next phase to pick up.
 
 Scope per `.claude/contracts/phase-0.md`: monorepo scaffold, tooling presets
 (`packages/tooling`), empty-but-wired `apps/api` / `apps/worker` / `apps/web` /
@@ -17,22 +19,25 @@ Scope per `.claude/contracts/phase-0.md`: monorepo scaffold, tooling presets
 (`.github/workflows/ci.yml`), `AGENTS.md`, `STATE.md`, root `README.md`,
 `.claude/settings.json`.
 
-This gate is closing on **this commit** after a review pass (see Changelog) fixed
-every critical/major finding from the Phase 0 review. Phase 1 (`packages/shared`
-domain core: state machine, DTOs, Redis service + Lua, unit tests) has **not**
-started.
-
 ## Last tag
 
-**None yet.** This is the commit that will be tagged `phase-0-done` immediately
-after this update lands and the verification block below is re-confirmed on the
-committed tree (see AGENTS.md §4 gate ritual — commit → tag → update STATE.md is
-one atomic sequence, done in that order).
+**`phase-0-done`** — annotated tag on commit `76059dc` ("chore: bootstrap Phase 0
+monorepo and fix pre-gate review findings"), which is also the very first real
+commit of this repo's tree. `git tag --list 'phase-*-done'` returns exactly this
+one tag.
 
-Historical note: the tree was fully built in this working copy before this commit
-but was never `git add`ed — `git ls-files` showed only `PRD.md` and
-`prototype/index.html` prior to this commit. There is no phase history before this
-entry.
+Historical note: the tree was fully built in the working copy before that commit
+but was never `git add`ed until then — `git ls-files` previously showed only
+`PRD.md` and `prototype/index.html`. There is no phase history before this entry.
+
+**Fresh-clone verification performed and passed:** cloned the repo to a scratch
+path, checked out `phase-0-done`, confirmed `AGENTS.md`, `STATE.md`, and
+`.claude/contracts/phase-0.md` are present, then ran the full verification block
+(`pnpm install`, `format:check`, `typecheck`, `lint`, `build`, `test`,
+`test:integration`, `stress`) — all eight green, including `apps/api/dist/main.js`
+and `apps/worker/dist/main.js` both containing real build output. This is the
+concrete evidence for AGENTS.md's "fresh agent can resume cold" claim; scratch
+clone was deleted afterward.
 
 ## Verification evidence
 
@@ -95,23 +100,22 @@ afterward (not just a 0 exit code).
 
 ## Exact next actions
 
-1. `git add -A && git commit` the Phase 0 tree (this is the first real commit of
-   the build — see Changelog). Verification evidence above is already captured on
-   the pre-commit working tree; confirm nothing changes it (a bare `git status`
-   after `add` should show only the expected files staged, no surprises).
-2. `git tag -a phase-0-done -m "Phase 0: monorepo bootstrap, tooling, CI, docs"`.
-3. Do a fresh `git clone` of the repo to a scratch path and confirm `AGENTS.md`,
-   `STATE.md`, and `.claude/contracts/phase-0.md` are present there and the §3
-   step-4 verification block passes — this is the only real evidence for the
-   "fresh agent can resume cold" claim AGENTS.md makes. Record the result here
-   once done (as of this edit it has not yet been performed).
-4. Start Phase 1 per `.claude/contracts/phase-1.md` if it exists; if it does not
-   yet exist, the orchestrator role (AGENTS.md §5) must have the architect produce
-   it before any Phase 1 implementation work starts.
+1. `.claude/contracts/phase-1.md` does not exist yet. The orchestrator role
+   (AGENTS.md §5) must have the `architect` agent produce it — scope per PRD §8:
+   `packages/shared` domain core (purchase state machine, DTOs), the Redis service
+   wrapper, and the atomic Lua purchase-decision script, with unit tests including
+   Lua atomicity specs. This is the first and only next action; nothing else is
+   pending from Phase 0.
+2. Once the Phase 1 contract exists, follow AGENTS.md §3's resume protocol
+   normally (step 1 onward — `phase-0-done` is now a real tag, so the step 0
+   cold-start branch no longer applies) to plan and fan out Phase 1 implementation.
+3. Optional follow-up carried from Open Issues: decide the Phase 5 dependency-audit
+   plan (see item 1 above) and confirm the `.claude/settings.json` hooks behave as
+   expected the first time they fire for real (item 2 above).
 
 ## Changelog
 
-- **(this commit, pre-tag)** Phase 0 review-fix pass: removed the uncontracted
+- **`phase-0-done` (commit `76059dc`)** Phase 0 review-fix pass: removed the uncontracted
   `pnpm audit` CI step (not in the frozen §17 job graph); fixed the
   `*.tsbuildinfo`/`deleteOutDir` desync that silently zeroed out `nest build`
   output (gitignored the cache files, wired `clean` scripts to remove them,
