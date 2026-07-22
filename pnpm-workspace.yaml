@@ -4,7 +4,10 @@ packages:
 allowBuilds:
   '@nestjs/core': true
   '@swc/core': true
+  cpu-features: false
   esbuild: true
+  protobufjs: false
+  ssh2: false
 overrides:
   vite: ^6.0.5
 # PRD §10: dependency audit gate (.github/workflows/ci.yml `audit` job) runs
