@@ -1,9 +1,9 @@
 {
   "extends": "./base.json",
-  "display": "Flash Node (CommonJS)",
+  "display": "Flash Node (CommonJS emit, NodeNext resolution)",
   "compilerOptions": {
-    "module": "CommonJS",
-    "moduleResolution": "Node",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "types": ["node"]

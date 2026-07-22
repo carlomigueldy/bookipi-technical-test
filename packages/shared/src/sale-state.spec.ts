@@ -166,7 +166,12 @@ describe('input validation — throws RangeError, never returns a default', () =
 
   it('msUntilNextTransition throws RangeError on an invalid window (delegates to deriveSaleState)', () => {
     expect(() =>
-      msUntilNextTransition({ nowMs: 1_000, startsAtMs: 2_000, endsAtMs: 1_000, stockRemaining: 1 }),
+      msUntilNextTransition({
+        nowMs: 1_000,
+        startsAtMs: 2_000,
+        endsAtMs: 1_000,
+        stockRemaining: 1,
+      }),
     ).toThrow(RangeError);
   });
 });
@@ -176,25 +181,27 @@ describe('msUntilNextTransition', () => {
   const E = 2_000_000;
 
   it('upcoming -> startsAtMs - nowMs', () => {
-    expect(msUntilNextTransition({ nowMs: S - 400, startsAtMs: S, endsAtMs: E, stockRemaining: 5 })).toBe(
-      400,
-    );
+    expect(
+      msUntilNextTransition({ nowMs: S - 400, startsAtMs: S, endsAtMs: E, stockRemaining: 5 }),
+    ).toBe(400);
   });
 
   it('active -> endsAtMs - nowMs', () => {
-    expect(msUntilNextTransition({ nowMs: S + 100, startsAtMs: S, endsAtMs: E, stockRemaining: 5 })).toBe(
-      E - (S + 100),
-    );
+    expect(
+      msUntilNextTransition({ nowMs: S + 100, startsAtMs: S, endsAtMs: E, stockRemaining: 5 }),
+    ).toBe(E - (S + 100));
   });
 
   it('sold_out -> endsAtMs - nowMs (same rule as active)', () => {
-    expect(msUntilNextTransition({ nowMs: S + 100, startsAtMs: S, endsAtMs: E, stockRemaining: 0 })).toBe(
-      E - (S + 100),
-    );
+    expect(
+      msUntilNextTransition({ nowMs: S + 100, startsAtMs: S, endsAtMs: E, stockRemaining: 0 }),
+    ).toBe(E - (S + 100));
   });
 
   it('ended -> null', () => {
-    expect(msUntilNextTransition({ nowMs: E, startsAtMs: S, endsAtMs: E, stockRemaining: 5 })).toBeNull();
+    expect(
+      msUntilNextTransition({ nowMs: E, startsAtMs: S, endsAtMs: E, stockRemaining: 5 }),
+    ).toBeNull();
   });
 
   it('ended (well past) -> null', () => {

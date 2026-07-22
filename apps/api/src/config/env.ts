@@ -1,51 +1,69 @@
 /**
- * Environment contract for @flash/api — frozen contract §11.
+ * Environment contract for @flash/api — frozen contract §3.2.
  *
- * Declares and defaults every row of the frozen env table that this service
- * reads, across all phases, so the seam is real from day one. Phase 0 code
- * only *uses* the Phase-0 rows (NODE_ENV, LOG_LEVEL, API_HOST, API_PORT);
- * the rest exist here already for Phase 1+ to consume without touching this
- * file's shape.
+ * Parses `process.env` ONCE, at module load, before `NestFactory.create` —
+ * every other module that needs an env value imports `env` from here (or
+ * injects the `API_ENV` DI token, which is `useValue: env`). An invalid or
+ * missing-and-malformed value is a FATAL boot error with a printed field
+ * list, never a silent `NaN`/`undefined` default reaching a security control
+ * (contract §3.2's rationale, restated in `env.schema.ts`'s header comment).
  *
- * Plain `process.env` reads with `Number()`/defaults — no zod, no
- * `@nestjs/config` in Phase 0 (contract §11 Phase-0 rule).
+ * `parseApiEnv` is exported separately from the `env` singleton so it is
+ * testable as a pure function — `env.spec.ts` never touches `process.exit`.
  */
+import { envSchema, type ApiEnv, type LogLevel, type NodeEnv } from './env.schema.js';
 
-export type NodeEnv = 'development' | 'test' | 'production';
-export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
+export type { ApiEnv, LogLevel, NodeEnv };
 
-export interface ApiEnv {
-  NODE_ENV: NodeEnv;
-  LOG_LEVEL: LogLevel;
-  API_HOST: string;
-  API_PORT: number;
-  CORS_ORIGIN: string;
-  DATABASE_URL: string;
-  REDIS_URL: string;
-  SALE_ID: string;
-  SALE_NAME: string;
-  SALE_STARTS_AT: string;
-  SALE_ENDS_AT: string;
-  SALE_TOTAL_STOCK: number;
-  RATE_LIMIT_MAX: number;
-  RATE_LIMIT_WINDOW_MS: number;
-  ORDERS_QUEUE_NAME: string;
+export class EnvValidationError extends Error {
+  readonly issues: readonly string[];
+
+  constructor(issues: readonly string[]) {
+    super(`invalid environment configuration:\n${issues.map((i) => `  - ${i}`).join('\n')}`);
+    this.name = 'EnvValidationError';
+    this.issues = issues;
+  }
 }
 
-export const env: ApiEnv = {
-  NODE_ENV: (process.env.NODE_ENV as NodeEnv | undefined) ?? 'development',
-  LOG_LEVEL: (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info',
-  API_HOST: process.env.API_HOST ?? '0.0.0.0',
-  API_PORT: Number(process.env.API_PORT ?? 3000),
-  CORS_ORIGIN: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
-  DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://flash:flash@localhost:5433/flash',
-  REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6380',
-  SALE_ID: process.env.SALE_ID ?? 'flash-2026',
-  SALE_NAME: process.env.SALE_NAME ?? 'Aurora — Founders Edition',
-  SALE_STARTS_AT: process.env.SALE_STARTS_AT ?? '2026-07-22T12:00:00.000Z',
-  SALE_ENDS_AT: process.env.SALE_ENDS_AT ?? '2026-07-22T13:00:00.000Z',
-  SALE_TOTAL_STOCK: Number(process.env.SALE_TOTAL_STOCK ?? 500),
-  RATE_LIMIT_MAX: Number(process.env.RATE_LIMIT_MAX ?? 20),
-  RATE_LIMIT_WINDOW_MS: Number(process.env.RATE_LIMIT_WINDOW_MS ?? 1000),
-  ORDERS_QUEUE_NAME: process.env.ORDERS_QUEUE_NAME ?? 'orders',
-};
+const PRODUCTION_REQUIRED_FIELDS = ['CORS_ORIGIN', 'DATABASE_URL', 'REDIS_URL', 'SALE_ID'] as const;
+
+/** Pure — throws `EnvValidationError` on failure, never touches `process.exit`. */
+export function parseApiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
+  if (source.NODE_ENV === 'production') {
+    const missing = PRODUCTION_REQUIRED_FIELDS.filter((field) => {
+      const value = source[field];
+      return value === undefined || value.trim().length === 0;
+    });
+    if (missing.length > 0) {
+      throw new EnvValidationError(
+        missing.map((field) => `${field}: required explicitly in production`),
+      );
+    }
+  }
+
+  const result = envSchema.safeParse(source);
+  if (!result.success) {
+    const issues = result.error.issues.map(
+      (issue) => `${issue.path.length > 0 ? issue.path.join('.') : '(root)'}: ${issue.message}`,
+    );
+    throw new EnvValidationError(issues);
+  }
+  return result.data;
+}
+
+/**
+ * The only place `process.exit` is called in this file. Kept as a tiny,
+ * separate function (rather than inlined into the top-level `const env =`)
+ * so `parseApiEnv`'s pure validation logic stays independently testable.
+ */
+function loadEnvOrExit(): ApiEnv {
+  try {
+    return parseApiEnv(process.env);
+  } catch (err) {
+    if (!(err instanceof EnvValidationError)) throw err;
+    console.error(`\nFatal: @flash/api ${err.message}\n`);
+    return process.exit(1);
+  }
+}
+
+export const env: ApiEnv = loadEnvOrExit();

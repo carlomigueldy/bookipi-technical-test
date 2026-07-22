@@ -55,7 +55,11 @@ const SEED_OUTCOMES: readonly SeedOutcome[] = [
   'STOCK_MISSING',
 ];
 
-const COMPENSATE_OUTCOMES: readonly CompensateOutcome[] = ['COMPENSATED', 'COMPENSATED_CAPPED', 'NOOP'];
+const COMPENSATE_OUTCOMES: readonly CompensateOutcome[] = [
+  'COMPENSATED',
+  'COMPENSATED_CAPPED',
+  'NOOP',
+];
 
 const RECONCILE_OUTCOMES: readonly ReconcileOutcome[] = ['RECONCILED', 'NOT_INITIALIZED'];
 
@@ -168,7 +172,11 @@ export class SaleRedisStore {
    * re-purchased — is unconditionally a NOOP; it can never touch stock or the buyers
    * Set for a reservation it does not own.
    */
-  async compensate(saleId: string, userId: string, reservationId: string): Promise<CompensateResult> {
+  async compensate(
+    saleId: string,
+    userId: string,
+    reservationId: string,
+  ): Promise<CompensateResult> {
     assertSaleId(saleId);
     const keys = saleKeys(saleId);
 
@@ -255,7 +263,10 @@ export class SaleRedisStore {
    * no Lua atomicity requirement here because this runs once, offline, against a
    * caller-verified snapshot, not concurrently with live traffic.
    */
-  async restoreReservations(saleId: string, entries: readonly ReservationRestoreInput[]): Promise<void> {
+  async restoreReservations(
+    saleId: string,
+    entries: readonly ReservationRestoreInput[],
+  ): Promise<void> {
     assertSaleId(saleId);
     if (entries.length === 0) return;
     const keys = saleKeys(saleId);
@@ -270,7 +281,9 @@ export class SaleRedisStore {
       }
       const results = await pipeline.exec();
       if (results === null) {
-        throw new Error('SaleRedisStore.restoreReservations: pipeline aborted (connection not ready)');
+        throw new Error(
+          'SaleRedisStore.restoreReservations: pipeline aborted (connection not ready)',
+        );
       }
       for (const [err] of results) {
         if (err) throw err;
@@ -287,8 +300,17 @@ export class SaleRedisStore {
       [number, number, number, number, number, number, string, string, string]
     >(this.client, STATUS_SCRIPT, [keys.config, keys.stock], []);
 
-    const [nowMs, initializedFlag, stockRemaining, totalStock, startsAtMs, endsAtMs, name, startsAt, endsAt] =
-      raw;
+    const [
+      nowMs,
+      initializedFlag,
+      stockRemaining,
+      totalStock,
+      startsAtMs,
+      endsAtMs,
+      name,
+      startsAt,
+      endsAt,
+    ] = raw;
     const initialized = initializedFlag === 1;
 
     if (!initialized) {

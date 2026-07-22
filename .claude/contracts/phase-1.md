@@ -294,14 +294,29 @@ asserts it verbatim. `S` = `startsAtMs`, `E` = `endsAtMs`, stock = 5 unless stat
 | `E - 1` | `active` | **`true`** | `CONFIRMED` |
 | `E` (exact) | `ended` | **`false`** | `SALE_ENDED` |
 | `E + 1` | `ended` | `false` | `SALE_ENDED` |
-| `S` (exact), stock 0 | `upcoming` | `true` | `SOLD_OUT` |
+| `S` (exact), stock 0 | `sold_out` | `true` | `SOLD_OUT` |
+| `S - 1`, stock 0 | `upcoming` | `false` | `SALE_NOT_STARTED` |
 | `E - 1`, stock 0 | `sold_out` | `true` | `SOLD_OUT` |
 | `E`, stock 0 | `ended` | `false` | `SALE_ENDED` |
 
-The last three rows are the ones that catch a naive implementation: at `S` with zero stock the
-*state* is `upcoming` (rule 1 fires first) but the *purchase* is `SOLD_OUT` (the window is open,
-so `purchase.lua` reaches the stock check). These are two different questions and must not be
-collapsed.
+> **ERRATUM — corrected 2026-07-22 by the Phase 2 architect (`.claude/contracts/phase-2.md` §13;
+> STATE.md open issue 1).** The `` `S` (exact), stock 0 `` row previously read `upcoming` in the
+> `deriveSaleState` column. That contradicted §3.2's own frozen precedence: rule 1 is *strict*
+> (`nowMs < startsAtMs`), so at `nowMs === startsAtMs` rule 1 does **not** fire, rule 2 does not
+> fire, and rule 3 (`stockRemaining <= 0`) yields **`sold_out`**. The shipped
+> `deriveSaleState` implementation and its unit spec always returned `sold_out` here; only this
+> table cell was wrong. The `` `S - 1`, stock 0 `` row was added to make explicit the case the old
+> cell was probably reaching for — that is where `upcoming` genuinely beats `sold_out`.
+
+The zero-stock rows are the ones that catch a naive implementation. Two distinct lessons:
+
+1. **`upcoming` beats `sold_out`, but only strictly before `S`.** At `S - 1` with zero stock the
+   state is `upcoming` (rule 1 fires) and the purchase is `SALE_NOT_STARTED` — PRD §3.4 has no
+   `upcoming -> sold_out` edge. At `S` exactly, the window is open, so the state is `sold_out`.
+2. **State and purchase outcome are different questions.** At `S` with zero stock both happen to
+   read "sold out", but at `S - 1` they diverge (`upcoming` vs `SALE_NOT_STARTED`) and at `E` with
+   zero stock they diverge again (`ended` vs `SALE_ENDED`, not `SOLD_OUT`). `deriveSaleState` is
+   advisory presentation; `purchase.lua` is enforcement. They must never be collapsed.
 
 ---
 

@@ -15,17 +15,19 @@ not edit it, commit it, or create phase tags — see "Process notes" for why.
 **Phase 0 — Bootstrap. CLOSED.** (tag `phase-0-done`, merged to `main` via PR #1)
 **Phase 1 — Domain core. CLOSED.** (tag `phase-1-done`)
 
-**Phase 2 — API. NOT STARTED.** Next up: `SaleModule` (status/config), `PurchaseModule`
-(attempt + status), `HealthModule`, global rate limiting, and integration tests
-including the concurrency spec. Scope per PRD §8 and §4.
+**Phase 2 — API. CLOSED.** (tag `phase-2-done`)
+
+**Phase 3 — Worker & durability. NOT STARTED.** Next up: BullMQ consumer,
+idempotent Postgres persistence, DLQ compensation, and boot reconciliation. The
+architect must freeze `.claude/contracts/phase-3.md` before implementation fan-out.
 
 ## Gate policy — READ THIS FIRST
 
 > **⚠ CI IS DELIBERATELY OUT OF THE GATE DEFINITION — owner decision, 2026-07-22.**
 >
-> GitHub Actions is unavailable on this account: all 8 jobs abort at 0–4s with *"The
+> GitHub Actions is unavailable on this account: all 8 jobs abort at 0–4s with _"The
 > job was not started because recent account payments have failed or your spending
-> limit needs to be increased."* Private repos consume Actions minutes. This is a
+> limit needs to be increased."_ Private repos consume Actions minutes. This is a
 > billing matter, **not** a code defect — CI correctly fired on both the branch push
 > and the PR before hitting the billing wall. **No CI run has ever succeeded here.**
 >
@@ -43,13 +45,14 @@ including the concurrency spec. Scope per PRD §8 and §4.
 
 ## Tags
 
-| Tag | Commit | Meaning |
-|---|---|---|
-| `phase-0-done` | `d47314e` | Bootstrap gate passed (merged to `main` as `aee91b9`) |
-| `phase-1-done` | see `git rev-parse phase-1-done^{commit}` | Domain core gate passed |
+| Tag            | Commit                                    | Meaning                                               |
+| -------------- | ----------------------------------------- | ----------------------------------------------------- |
+| `phase-0-done` | `d47314e`                                 | Bootstrap gate passed (merged to `main` as `aee91b9`) |
+| `phase-1-done` | see `git rev-parse phase-1-done^{commit}` | Domain core gate passed                               |
+| `phase-2-done` | see `git rev-parse phase-2-done^{commit}` | API gate passed                                       |
 
 Phase branches are cut from the **previous phase's tag**, not from `main`.
-Current branch: `phase-1/domain-core`.
+Current branch: `phase-2/api`.
 
 > `phase-0-done` was moved once, deliberately: it originally pointed at `76059dc`,
 > which did **not** pass the gate (hollow build + vulnerable deps still present).
@@ -106,12 +109,62 @@ T9  never-seeded sale -> NOT_INITIALIZED, stockRemaining -1, never SOLD_OUT     
 No spec skips when Redis is unreachable — an unreachable Redis fails the suite rather
 than silently passing.
 
+## Phase 2 verification evidence
+
+All commands were re-run by the **orchestrator directly** on 2026-07-22. Turbo
+caching was bypassed and the integration task was part of the same forced graph.
+
+```text
+$ pnpm install --frozen-lockfile
+Already up to date
+
+$ pnpm format:check
+All matched files use Prettier code style!
+
+$ pnpm exec turbo run lint typecheck test build test:integration --force
+Tasks:    25 successful, 25 total
+Cached:   0 cached, 25 total
+Time:     40.318s
+
+$ pnpm audit --audit-level high
+No known vulnerabilities found
+
+$ node scripts/assert-build-output.mjs apps/api/dist/main.js
+bookipi-technical-test: build output verified (apps/api/dist/main.js)
+```
+
+Test totals in the forced graph:
+
+- `@flash/api` unit: **17 files, 180 tests passed**.
+- `@flash/api` integration: **13 files, 72 tests passed**, real Redis 7.4 and
+  Postgres 16 via Testcontainers, zero unhandled errors and zero teardown warnings.
+- `@flash/shared`: **206 tests passed**; `@flash/redis`: **45 tests passed**.
+
+Phase-specific evidence:
+
+- Money test, three iterations: 500 concurrent real HTTP purchases at stock 10 →
+  exactly **10 CONFIRMED / 490 SOLD_OUT / 0 other** each time; stock 0, 10 buyers,
+  10 distinct reservations and 10 deterministic BullMQ jobs (I1/I2/I4).
+- Negative control: the identical real-HTTP harness with the deliberately unsafe
+  non-atomic service oversold and drove stock below zero.
+- Window edges: Redis-time relations passed at start/end boundaries with zero side
+  effects on rejected attempts (I3).
+- Queue failure: confirmed reservations remained truthful 201s with stock, buyers,
+  and reservation ledger intact; the real black-holed producer stayed bounded at one
+  generation / 64 in-flight operations, cleared both counters, and emitted no
+  unhandled rejection (I4 handoff to Phase 3 reconciliation).
+- Lifecycle/security: bounded queue observation and shutdown watchdog passed; raw
+  slow-header/body sockets were closed by finite deadlines; Redis limiter TTL healing,
+  cardinality, X-Forwarded-For, CORS, request ID, headers, and error-hygiene specs passed.
+- Required source greps returned zero forbidden hits. `ignoreGhsas` remains `[]`.
+- Final Terra adversarial review and Sol security/final architecture review approved.
+
 ## Phase 1 design decisions worth defending (README §12 material)
 
 1. **Window enforcement (I3) lives INSIDE `purchase.lua`**, using Redis `TIME`, not in
    an API-only guard. An API-layer check has a genuine TOCTOU gap between guard and
    `EVALSHA` at 2k rps, and N pod clocks make I3 probabilistic rather than guaranteed.
-   The "Redis TIME is non-deterministic" objection applied to *verbatim* replication
+   The "Redis TIME is non-deterministic" objection applied to _verbatim_ replication
    (Redis ≤4); Redis 5+ replicates by effects and Phase 0 pins Redis 7.4. The API
    guard remains as a fast-path optimization only.
 2. **State is DERIVED, never stored** — `deriveSaleState()` is a pure function of
@@ -122,7 +175,7 @@ than silently passing.
    mock would pass against a 3-round-trip `GET`/`DECR`/`SADD` implementation — zero
    discriminating power. Atomicity is only provable against real Redis.
 4. **Redis lives in its own package `@flash/redis`**, not in `@flash/shared`.
-   `apps/web` imports *values* from shared, so ioredis behind that barrel would enter
+   `apps/web` imports _values_ from shared, so ioredis behind that barrel would enter
    the browser bundle graph; it also isolates the Docker-requiring test surface to one
    turbo task.
 5. **`@flash/shared` has two entry points** — `.` (pure, zero-dep) and `./schemas`
@@ -135,14 +188,14 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
 
 1. **CRITICAL (I1/I2/I4) — `compensate.lua` idempotency was keyed on set membership,
    not reservation identity.** A user who compensated and then re-purchased became a
-   Set member again, silently re-arming the stale DLQ compensation for their *first*
+   Set member again, silently re-arming the stale DLQ compensation for their _first_
    reservation. On redelivery it would tear down a live, already-persisted order:
    stock inflated above what is truly outstanding (I1) and the user un-blocked for a
    second confirmed order (I2). **Fixed:** idempotency token is now reservation
    identity, carried in a `sale:{id}:reservations` hash written atomically by
    `purchase.lua`; a stale job whose reservationId no longer matches is a NOOP.
-   Regression test: *"FINDING 1 REGRESSION — a stale, redelivered compensation for an
-   EARLIER reservation must not tear down a LATER, live reservation."*
+   Regression test: _"FINDING 1 REGRESSION — a stale, redelivered compensation for an
+   EARLIER reservation must not tear down a LATER, live reservation."_
 2. **CRITICAL (I4) — PRD §3.5's recovery paths were unimplementable on the frozen
    surface.** At CONFIRMED time Redis recorded only set membership — no reservation
    id, no timestamp, no pending-persistence marker — and `seed.lua` refuses to write
@@ -151,60 +204,53 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
    would have made I4 unsatisfiable in Phase 3 regardless of worker quality.**
    **Fixed:** added the reservations ledger plus `reconcileStock()`,
    `scanReservations()` (HSCAN, cursor-paged), and `restoreReservations()`.
-   Regression test: *"FINDING 2 REGRESSION — reproduces the warm-restart drift
-   scenario: seed() cannot correct it, reconcileStock() can."*
+   Regression test: _"FINDING 2 REGRESSION — reproduces the warm-restart drift
+   scenario: seed() cannot correct it, reconcileStock() can."_
 
-## Open issues
+## Open issues and accepted risks
 
-1. **Contract §3.3 boundary table has one self-inconsistent row** (minor): for
-   `nowMs === startsAtMs` with `stock=0` the table says `upcoming`, but §3.2's
-   precedence (strict `nowMs < startsAtMs`) yields `sold_out`. Implementation and 3 of
-   that row's 4 cells agree on `sold_out`; the table cell is the outlier. Fix the
-   contract text in Phase 2 so it cannot mislead a later agent.
-2. **API-side clock source for the I3 fast-path guard is unpinned** (minor, I3). The
-   contract mandates a `deriveSaleState` fast-path but never pins where the API gets
-   its clock, and `@flash/redis` exposes no primitive to learn Redis's clock offset —
-   a skewed pod could reject purchases Redis would confirm. Enforcement is safe
-   (Lua owns it); this is a UX/false-negative concern. **Phase 2 must pin this.**
-3. **`status.lua` sentinel leaks** (minor): emits `stockRemaining = -1` when config
-   exists but the stock key is gone; `SaleRedisStore` passes it through unvalidated,
-   where `deriveSaleState` reads it as `sold_out`, contradicting the response schema's
-   nonnegative constraint. Handle in Phase 2's status endpoint.
-4. **`.claude/settings.json` hooks are partially exercised.** The main-push guard
-   fired correctly and did its job. The post-edit typecheck hook has still not been
-   observed firing.
-5. **Skill discovery is unreliable for subagents.** Several agents found project-local
-   skills absent from their Skill listing despite valid symlinks, and fell back to
-   reading `.agents/skills/<name>/SKILL.md` directly. That fallback works — brief
-   future agents with the explicit path as well as the skill name.
-6. **`.dockerignore` correctness unverified from a cold clone** (carried from Phase 0);
-   confirm image contents from a clean checkout at Phase 6.
-7. **Node/pnpm pins are tight**: 22.14.x everywhere because pnpm 11.9 requires
-   Node ≥22.13. Do not lower either without re-checking the other.
+1. **Phase 3 owns full I4 durability.** Phase 2 proves that a confirmed reservation is
+   retained in the Redis ledger when enqueue fails. The worker, Postgres upsert, DLQ
+   compensation, and startup reconciliation are not implemented until Phase 3.
+2. **Identity is client-asserted by PRD scope.** Entitlement theft and per-candidate
+   buyer probing remain possible without authentication. `README.md` documents the
+   production requirement: derive `userId` from an authenticated principal.
+3. **Readiness and metrics are public aggregate ops surfaces.** Accepted for this local
+   take-home and required ops panel; a production deployment must put them behind an
+   internal listener or authenticated gateway.
+4. **Rate limiting deliberately fails open.** I1–I4 remain independently enforced by
+   Redis Lua/Postgres. Production still needs network-layer flood protection.
+5. **Single-sale assumptions are binding.** `orders_user_id_uniq` and the status lookup
+   are global by `user_id`. Multi-sale support must add sale scoping everywhere as a
+   contract/schema migration.
+6. **`.dockerignore` correctness remains unverified from a cold clone** (carried from
+   Phase 0); confirm image contents at Phase 6.
+7. **Node/pnpm pins remain tight:** Node 22.14.x and pnpm 11.9.x. Do not lower either
+   without checking the other. NodeNext now requires runtime dependencies to expose a
+   CommonJS `require` condition; see Phase 2 Amendment A1.
+8. **CI remains unavailable by owner decision** because of GitHub Actions billing. The
+   local uncached gate above is the authoritative evidence until billing is restored.
 
 ## Exact next actions
 
-1. **Merge the Phase 1 PR** (opened against `main`). CI is skipped by owner decision,
-   so it merges on local evidence.
-2. **Have the `architect` agent (Opus) produce `.claude/contracts/phase-2.md`** before
-   any implementation fan-out. Scope per PRD §4 and §8: `SaleModule` (status/config),
-   `PurchaseModule` (attempt + status), `HealthModule`, global per-IP + per-user rate
-   limiting, structured pino logging with request IDs, and integration tests with
-   Testcontainers. The contract must resolve open issues 1–3 above, and must pin the
-   API's clock source for the I3 fast-path guard.
-3. **Phase 2's gate must include the concurrency spec from PRD §6.1** — N=500 parallel
-   purchases for stock=10 through the *HTTP layer*, asserting exactly 10 CONFIRMED,
-   490 SOLD_OUT, 10 PG rows, 10 distinct users. Reuse the T2 negative-control pattern:
-   any new atomicity claim needs a control proving the test can fail.
-4. **Security review (Opus) is mandatory at Phase 2** per PRD §9.3 — it is the phase
-   where the untrusted HTTP surface first exists.
+1. Have the Sol-mapped `architect` produce and freeze
+   `.claude/contracts/phase-3.md` before any implementation fan-out.
+2. The Phase 3 contract must define BullMQ consumer ownership, Postgres idempotent
+   persistence (`ON CONFLICT (user_id) DO NOTHING`), retry/DLQ behavior,
+   reservation-identity compensation, and boot reconciliation over the Phase 1 ledger.
+3. Fan out only after shared queue job/persistence/reconciliation interfaces are frozen.
+   Terra implements; Terra adversarial review attacks I1/I2/I4 failure modes; repeated
+   complex failures escalate to Sol.
+4. Gate Phase 3 with the canonical forced Turbo graph plus real failure-mode integration
+   tests for worker crash/redelivery, Postgres outage/recovery, DLQ compensation, and
+   startup reconciliation. Keep the negative-control practice for new atomicity claims.
 
 ## Process notes
 
 **Verification reports are claims, not evidence.** Phase 0 was reported GREEN three
 times before it actually was: a build exiting 0 while emitting zero JavaScript, and a
 security gate deleted rather than satisfied, both survived the implementation pass,
-the remediation pass, *and* two adversarial reviews. Only independent re-execution
+the remediation pass, _and_ two adversarial reviews. Only independent re-execution
 caught them. The orchestrator re-runs every gate command itself, with caching
 bypassed, before tagging. Phase 1 was verified this way.
 
@@ -220,6 +266,16 @@ with a control demonstrating the harness detects the violation.
 
 ## Changelog
 
+- **`phase-2-done`** — API. NestJS/Fastify sale, purchase, status, metrics,
+  liveness/readiness, Redis-backed IP/user rate limiting, structured error envelopes,
+  request IDs, security headers/CORS, Redis-anchored clock, and bounded BullMQ producer.
+  The real HTTP integration harness covers exact response schemas, production limits,
+  raw slow-client deadlines, queue/Redis/Postgres outages, bounded shutdown, and a
+  falsifiable 500-request concurrency proof. Final gate: 25/25 forced Turbo tasks with
+  zero cache hits; 180 API units and 72 integrations; audit clean; Terra adversarial,
+  Sol security, and Sol final architecture reviews approved. Amendments A1–A4.2 record
+  NodeNext resolution, total response messages, lifecycle ownership, finite security
+  controls, and executable BullMQ job IDs.
 - **`phase-1-done`** — Domain core. `@flash/shared`: derived sale state machine with
   exact-millisecond half-open `[startsAt, endsAt)` semantics, Zod DTO/validation
   schemas (dual entry points), key builders with cluster hash-tag assertions, and the

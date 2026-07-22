@@ -75,19 +75,28 @@ async function seedWithWindow(
 }
 
 /** Seeds a sale whose window is already open and stays open for an hour. */
-export async function seedActiveSale(store: SaleRedisStore, options: SeedSaleOptions): Promise<string> {
+export async function seedActiveSale(
+  store: SaleRedisStore,
+  options: SeedSaleOptions,
+): Promise<string> {
   const now = Date.now();
   return seedWithWindow(store, options, now - 60_000, now + 3_600_000, 'active');
 }
 
 /** Seeds a sale whose window has not opened yet. */
-export async function seedFutureSale(store: SaleRedisStore, options: SeedSaleOptions): Promise<string> {
+export async function seedFutureSale(
+  store: SaleRedisStore,
+  options: SeedSaleOptions,
+): Promise<string> {
   const now = Date.now();
   return seedWithWindow(store, options, now + 3_600_000, now + 7_200_000, 'future');
 }
 
 /** Seeds a sale whose window has already closed. */
-export async function seedEndedSale(store: SaleRedisStore, options: SeedSaleOptions): Promise<string> {
+export async function seedEndedSale(
+  store: SaleRedisStore,
+  options: SeedSaleOptions,
+): Promise<string> {
   const now = Date.now();
   return seedWithWindow(store, options, now - 7_200_000, now - 3_600_000, 'ended');
 }

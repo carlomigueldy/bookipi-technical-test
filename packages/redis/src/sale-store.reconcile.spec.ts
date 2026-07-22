@@ -174,7 +174,11 @@ describe('SaleRedisStore.scanReservations / restoreReservations — the I4 boot-
         // The "Postgres truth" a real Phase 3 sweep would read: one persisted order for
         // sweep-buyer-1, keeping its original reservationId for correlation.
         await store.restoreReservations(saleId, [
-          { userId: 'sweep-buyer-1', reservationId: originalReservationId, reservedAtMs: Date.now() - 5000 },
+          {
+            userId: 'sweep-buyer-1',
+            reservationId: originalReservationId,
+            reservedAtMs: Date.now() - 5000,
+          },
         ]);
 
         // I2 restored: the buyer is a Set member again, so a duplicate purchase is
