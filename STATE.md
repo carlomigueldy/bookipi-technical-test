@@ -30,15 +30,29 @@ atomicity specs. Scope per PRD §8 and §3.2.
 the whole of Phase 0 lands as one reviewable, CI-gated diff. Merging PR #1 is the
 remaining step to move `main` — deliberately left to the repo owner, see below.
 
-> **⚠ GitHub Actions is currently unavailable on this account.** All 8 CI jobs are
-> blocked at 0–4s with: *"The job was not started because recent account payments
-> have failed or your spending limit needs to be increased."* This is an account
-> billing matter (private repos consume Actions minutes), **not** a code defect —
-> the CI trigger fix itself works, and CI correctly fired on both the branch push
-> and the PR. **No CI run has ever succeeded in this repo.** Resolve via GitHub
-> Settings → Billing & plans, then re-run PR #1's checks to obtain the first real
-> CI evidence. Until then, every gate in this file rests on locally-executed
-> command evidence only.
+> **⚠ CI IS DELIBERATELY OUT OF THE GATE DEFINITION — owner decision, 2026-07-22.**
+>
+> GitHub Actions is unavailable on this account: all 8 jobs abort at 0–4s with
+> *"The job was not started because recent account payments have failed or your
+> spending limit needs to be increased."* Private repos consume Actions minutes.
+> This is a billing matter, **not** a code defect — the CI trigger fix works, and
+> CI correctly fired on both the branch push and the PR before hitting the billing
+> wall. **No CI run has ever succeeded in this repo.**
+>
+> The repo owner has decided to **skip CI** rather than block delivery on billing.
+> Therefore, for every phase: **the gate is locally-executed command evidence,
+> run by the orchestrator with turbo caching bypassed (`--force`, `Cached: 0
+> cached`).** CI green is NOT a gate condition and its absence must not be read as
+> an unmet gate.
+>
+> `.github/workflows/ci.yml` is still maintained as a correct, reviewable
+> deliverable (PRD §6.3) and will run the moment billing is resolved — it is simply
+> not load-bearing for phase gates right now. To reactivate: fix billing in GitHub
+> Settings → Billing & plans, then re-run the checks on any open PR.
+>
+> **AGENTS.md §8/§10 caveat for cold-resuming agents:** those sections describe a
+> PR-with-green-CI flow. That flow is suspended. Follow the local-evidence gate
+> above instead, and do not wait on CI that will never turn green.
 
 > **The tag was moved once, deliberately.** It previously pointed at commit
 > `76059dc`, which did **not** actually satisfy the Phase 0 gate: that tree still
@@ -197,10 +211,13 @@ bypassed, before tagging.
 
 ## Exact next actions
 
-0. **(Repo owner) Resolve GitHub Actions billing, then re-run PR #1's checks and
-   merge it.** This is the only way `main` advances and the only way CI evidence
-   ever becomes available. Phase 1 does not depend on it and may proceed in
-   parallel on a `phase-1/<slice>` branch cut from `phase-0-done`.
+0. **(Repo owner, blocking only for `main`) Merge PR #1.** CI is skipped by owner
+   decision, so PR #1 is ready to merge on local evidence alone; the orchestrator's
+   attempt was blocked by a permission classifier, so a human must click merge (or
+   run `gh pr merge 1 --merge` locally). Until then `main` stays at the PRD baseline
+   `2fa9ee4` while all real work lives on phase branches and tags. **Phase work is
+   NOT blocked by this** — phase branches are cut from the previous phase's tag, not
+   from `main`.
 1. **`.claude/contracts/phase-1.md` does not exist.** The orchestrator must have the
    `architect` agent (Opus) produce it first. Scope per PRD §8 / §3.2: the sale state
    machine, DTO/validation schemas in `packages/shared`, the Redis service wrapper
