@@ -52,6 +52,15 @@ import type {
   OrderStatus,
   SaleMetricField,
 } from './results';
+import {
+  ORDERS_QUEUE_PREFIX,
+  PERSIST_ORDER_JOB_NAME,
+  ORDERS_JOB_ATTEMPTS,
+  ORDERS_JOB_BACKOFF_DELAY_MS,
+  buildOrdersJobId,
+  assertOrdersQueueJobPayload,
+} from './queue';
+import type { OrdersQueueJobPayload } from './queue';
 
 export {
   SERVICE_NAMES,
@@ -82,6 +91,12 @@ export {
   isSuccessOutcome,
   SALE_METRIC_FIELDS,
   OUTCOME_METRIC_FIELD,
+  ORDERS_QUEUE_PREFIX,
+  PERSIST_ORDER_JOB_NAME,
+  ORDERS_JOB_ATTEMPTS,
+  ORDERS_JOB_BACKOFF_DELAY_MS,
+  buildOrdersJobId,
+  assertOrdersQueueJobPayload,
 };
 export type {
   ServiceName,
@@ -95,4 +110,5 @@ export type {
   AttemptOutcome,
   OrderStatus,
   SaleMetricField,
+  OrdersQueueJobPayload,
 };

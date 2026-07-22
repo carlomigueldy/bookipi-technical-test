@@ -1,5 +1,6 @@
 // apps/api/test/integration/purchase-flow.integration.spec.ts  [SLICE E]
 // POST /api/purchase — contract §6.4, §6.7, §8.1, §11.2.
+import { buildOrdersJobId } from '@flash/shared';
 import { purchaseResponseSchema } from '@flash/shared/schemas';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -132,8 +133,6 @@ describe('POST /api/purchase', () => {
     });
     expect(res.status).toBe(201);
 
-    const { buildOrdersJobId } =
-      (await import('../../src/queue/orders-queue.service.js')) as typeof import('../../src/queue/orders-queue.service.js');
     const job = await harness.queueObserver.getJob(
       buildOrdersJobId(harness.saleId, 'queue-check-2026'),
     );
@@ -144,7 +143,7 @@ describe('POST /api/purchase', () => {
   });
 
   it('real BullMQ accepts buildOrdersJobId and deduplicates one pair without colliding distinct users', async () => {
-    const { buildOrdersJobId, OrdersQueueService } =
+    const { OrdersQueueService } =
       (await import('../../src/queue/orders-queue.service.js')) as typeof import('../../src/queue/orders-queue.service.js');
     const service =
       harness.get<import('../../src/queue/orders-queue.service.js').OrdersQueueService>(

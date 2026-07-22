@@ -11,29 +11,47 @@
  * `@nestjs/config` in Phase 0 (contract §11 Phase-0 rule).
  */
 
-export type NodeEnv = 'development' | 'test' | 'production';
-export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
+import { envSchema, type WorkerEnv } from './env.schema.js';
 
-export interface WorkerEnv {
-  NODE_ENV: NodeEnv;
-  LOG_LEVEL: LogLevel;
-  WORKER_HEALTH_PORT: number;
-  DATABASE_URL: string;
-  REDIS_URL: string;
-  SALE_ID: string;
-  ORDERS_QUEUE_NAME: string;
-  WORKER_CONCURRENCY: number;
-  WORKER_MAX_ATTEMPTS: number;
+export type { WorkerEnv };
+
+export class EnvValidationError extends Error {
+  constructor(readonly issues: readonly string[]) {
+    super(
+      `invalid environment configuration:\n${issues.map((issue) => `  - ${issue}`).join('\n')}`,
+    );
+    this.name = 'EnvValidationError';
+  }
 }
 
-export const env: WorkerEnv = {
-  NODE_ENV: (process.env.NODE_ENV as NodeEnv | undefined) ?? 'development',
-  LOG_LEVEL: (process.env.LOG_LEVEL as LogLevel | undefined) ?? 'info',
-  WORKER_HEALTH_PORT: Number(process.env.WORKER_HEALTH_PORT ?? 3001),
-  DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://flash:flash@localhost:5433/flash',
-  REDIS_URL: process.env.REDIS_URL ?? 'redis://localhost:6380',
-  SALE_ID: process.env.SALE_ID ?? 'flash-2026',
-  ORDERS_QUEUE_NAME: process.env.ORDERS_QUEUE_NAME ?? 'orders',
-  WORKER_CONCURRENCY: Number(process.env.WORKER_CONCURRENCY ?? 16),
-  WORKER_MAX_ATTEMPTS: Number(process.env.WORKER_MAX_ATTEMPTS ?? 5),
-};
+const PRODUCTION_REQUIRED = [
+  'DATABASE_URL',
+  'REDIS_URL',
+  'SALE_ID',
+  'SALE_NAME',
+  'SALE_STARTS_AT',
+  'SALE_ENDS_AT',
+  'SALE_TOTAL_STOCK',
+] as const;
+
+export function parseWorkerEnv(source: NodeJS.ProcessEnv = process.env): WorkerEnv {
+  if (source.NODE_ENV === 'production') {
+    const missing = PRODUCTION_REQUIRED.filter(
+      (key) => source[key]?.trim().length === 0 || source[key] === undefined,
+    );
+    if (missing.length > 0) {
+      throw new EnvValidationError(
+        missing.map((key) => `${key}: required explicitly in production`),
+      );
+    }
+  }
+  const parsed = envSchema.safeParse(source);
+  if (!parsed.success) {
+    throw new EnvValidationError(
+      parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`),
+    );
+  }
+  return parsed.data;
+}
+
+export const env = parseWorkerEnv();

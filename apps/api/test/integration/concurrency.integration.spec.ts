@@ -3,7 +3,7 @@
 // stack: 500 genuinely parallel POST /api/purchase over real sockets, stock=10.
 import { randomUUID } from 'node:crypto';
 
-import { saleKeys } from '@flash/shared';
+import { buildOrdersJobId, saleKeys } from '@flash/shared';
 import { purchaseResponseSchema } from '@flash/shared/schemas';
 import Redis from 'ioredis';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,7 +11,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type AppHarness, bootHarness } from '../support/app-harness.js';
 import { closeHttpAgent, post } from '../support/http.js';
 import { resetSale, seedSale } from '../support/seed.js';
-import { buildOrdersJobId } from '../../src/queue/orders-queue.service.js';
 
 const N_REQUESTS = 500;
 const STOCK = 10;

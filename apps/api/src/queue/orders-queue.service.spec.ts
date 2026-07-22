@@ -1,23 +1,26 @@
 import { EventEmitter } from 'node:events';
+import {
+  ORDERS_JOB_ATTEMPTS,
+  ORDERS_JOB_BACKOFF_DELAY_MS,
+  PERSIST_ORDER_JOB_NAME,
+  buildOrdersJobId,
+  type OrdersQueueJobPayload,
+} from '@flash/shared';
 import type { Job, Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  buildOrdersJobId,
   MAX_PRODUCER_IN_FLIGHT,
   OrdersQueueService,
-  PERSIST_ORDER_JOB_NAME,
   PRODUCER_REOPEN_BACKOFF_MS,
   PRODUCER_RETIRE_BOUND_MS,
-  type OrdersQueueJobPayload,
-  WORKER_MAX_ATTEMPTS,
 } from './orders-queue.service.js';
 
 const PAYLOAD: OrdersQueueJobPayload = {
   saleId: 'flash-2026',
   userId: 'alice',
-  reservationId: 'a1b2c3',
+  reservationId: '11111111-1111-4111-8111-111111111111',
   reservedAtMs: 1_700_000_000_000,
   requestId: 'req-1',
 };
@@ -113,11 +116,20 @@ describe('OrdersQueueService A4.2 producer ownership', () => {
     await service.enqueue(PAYLOAD);
     expect(service.queue.add).toHaveBeenCalledWith(PERSIST_ORDER_JOB_NAME, PAYLOAD, {
       jobId: buildOrdersJobId(PAYLOAD.saleId, PAYLOAD.userId),
-      attempts: WORKER_MAX_ATTEMPTS,
-      backoff: { type: 'exponential', delay: 200 },
+      attempts: ORDERS_JOB_ATTEMPTS,
+      backoff: { type: 'exponential', delay: ORDERS_JOB_BACKOFF_DELAY_MS },
       removeOnComplete: { count: 1000 },
       removeOnFail: false,
     });
+  });
+
+  it('validates payloads before queue.add', async () => {
+    const service = new ControlledOrdersQueueService({ readiness: Promise.resolve() });
+
+    await expect(service.enqueue({ ...PAYLOAD, reservationId: 'not-a-uuid' })).rejects.toThrow(
+      TypeError,
+    );
+    expect(service.queue.add).not.toHaveBeenCalled();
   });
 
   it('readiness rejection retires once, creates zero adds, and settles every caller', async () => {

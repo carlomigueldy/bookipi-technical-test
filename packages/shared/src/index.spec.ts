@@ -4,6 +4,10 @@ import {
   ATTEMPT_OUTCOMES,
   HEALTH_PATH,
   OUTCOME_METRIC_FIELD,
+  ORDERS_JOB_ATTEMPTS,
+  ORDERS_JOB_BACKOFF_DELAY_MS,
+  ORDERS_QUEUE_PREFIX,
+  PERSIST_ORDER_JOB_NAME,
   PURCHASE_OUTCOME_HTTP_STATUS,
   SALE_STATES,
   SERVICE_NAMES,
@@ -11,11 +15,13 @@ import {
   USER_ID_MIN_LENGTH,
   USER_ID_PATTERN,
   assertSaleId,
+  assertOrdersQueueJobPayload,
+  buildOrdersJobId,
   deriveSaleState,
   isWithinSaleWindow,
   saleKeys,
 } from './index';
-import type { HealthResponse, SaleState } from './index';
+import type { HealthResponse, OrdersQueueJobPayload, SaleState } from './index';
 
 describe('@flash/shared barrel exports', () => {
   it('exposes the frozen service name list', () => {
@@ -72,5 +78,22 @@ describe('@flash/shared barrel exports', () => {
     expect(ATTEMPT_OUTCOMES).toContain('CONFIRMED');
     expect(PURCHASE_OUTCOME_HTTP_STATUS.CONFIRMED).toBe(201);
     expect(OUTCOME_METRIC_FIELD.SOLD_OUT).toBe('sold_out');
+  });
+
+  it('re-exports the queue contract, wired correctly through the barrel', () => {
+    const payload: OrdersQueueJobPayload = {
+      saleId: 'flash-2026',
+      userId: 'buyer-one',
+      reservationId: '11111111-1111-4111-8111-111111111111',
+      reservedAtMs: 1_700_000_000_000,
+      requestId: 'request-1',
+    };
+
+    expect(ORDERS_QUEUE_PREFIX).toBe('bull');
+    expect(PERSIST_ORDER_JOB_NAME).toBe('persist-order');
+    expect(ORDERS_JOB_ATTEMPTS).toBe(5);
+    expect(ORDERS_JOB_BACKOFF_DELAY_MS).toBe(200);
+    expect(buildOrdersJobId(payload.saleId, payload.userId)).toBe('flash-2026-buyer-one');
+    expect(assertOrdersQueueJobPayload(payload)).toBeUndefined();
   });
 });

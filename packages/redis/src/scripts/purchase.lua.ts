@@ -54,7 +54,9 @@ end
 if nowMs >= endsAtMs then
   return { 'SALE_ENDED', stock, nowMs, '' }
 end
-if redis.call('SISMEMBER', KEYS[3], ARGV[1]) == 1 then
+if redis.call('SISMEMBER', KEYS[3], ARGV[1]) == 1 or
+   redis.call('HEXISTS', KEYS[4], ARGV[1]) == 1 then
+  redis.call('SADD', KEYS[3], ARGV[1])
   return { 'ALREADY_PURCHASED', stock, nowMs, '' }
 end
 if stock <= 0 then

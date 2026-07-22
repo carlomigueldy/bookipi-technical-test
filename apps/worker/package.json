@@ -13,12 +13,17 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "@flash/redis": "workspace:*",
     "@flash/shared": "workspace:*",
     "@nestjs/common": "^11.1.28",
     "@nestjs/core": "^11.1.28",
     "@nestjs/platform-fastify": "^11.1.28",
+    "bullmq": "^5.80.9",
+    "ioredis": "^5.11.1",
+    "pg": "^8.22.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@flash/tooling": "workspace:*",
@@ -26,6 +31,7 @@
     "@nestjs/schematics": "^11.1.0",
     "@nestjs/testing": "^11.1.28",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
     "eslint": "^9.17.0",
     "typescript": "^5.7.2",
     "unplugin-swc": "^1.5.1",
