@@ -21,9 +21,17 @@ not edit it, commit it, or create phase tags — see "Process notes" for why.
 
 **Phase 4 — Frontend. CLOSED.** (tag `phase-4-done`)
 
-**Phase 5 — Stress & tuning. NOT STARTED.** Next up: freeze the Phase 5 contract,
-implement the k6 stress scenarios and invariant audit, tune against measured results,
-and publish the results table.
+**Phase 5 — Stress & tuning. CLOSED.** (tag `phase-5-done`)
+
+Qualified status: **COMPLETE — OWNER-AUTHORIZED ENVIRONMENT-LIMITED EVIDENCE BYPASS**.
+The live performance run and Phase 5 live I1–I4 audit were **NOT RUN / NOT
+EVALUATED** because `/usr/bin/ln` is owned by uid 65534 and therefore fails the
+frozen uid 0 trust prerequisite. The owner authorized proceeding without privileged
+host remediation; no performance, capacity, threshold, or live invariant claim is
+made.
+
+**Phase 6 — Ship. NOT STARTED.** Next up: have the architect produce and freeze the
+Phase 6 contract.
 
 ## Gate policy — READ THIS FIRST
 
@@ -56,9 +64,10 @@ and publish the results table.
 | `phase-2-done` | see `git rev-parse phase-2-done^{commit}` | API gate passed                                       |
 | `phase-3-done` | see `git rev-parse phase-3-done^{commit}` | Worker and durability gate passed                     |
 | `phase-4-done` | see `git rev-parse phase-4-done^{commit}` | Frontend gate passed                                  |
+| `phase-5-done` | see `git rev-parse phase-5-done^{commit}` | Qualified stress evidence gate passed                 |
 
 Phase branches are cut from the **previous phase's tag**, not from `main`.
-Current branch: `phase-4/frontend`.
+Current branch: `phase-5/stress`.
 
 > `phase-0-done` was moved once, deliberately: it originally pointed at `76059dc`,
 > which did **not** pass the gate (hollow build + vulnerable deps still present).
@@ -290,6 +299,58 @@ Phase-specific evidence:
   observation is the accepted medium issue recorded below; it is non-blocking and
   does not weaken I1–I4.
 
+## Phase 5 verification evidence
+
+Qualified status: **COMPLETE — OWNER-AUTHORIZED ENVIRONMENT-LIMITED EVIDENCE
+BYPASS**.
+
+The frozen install and format checks passed. The final independently inspected
+evidence on 2026-07-23 was:
+
+```text
+$ pnpm --filter @flash/load exec vitest run audit.spec.ts -t "A14"
+Test Files  1 passed (1)
+Tests       8 passed | 62 skipped (70)
+
+$ pnpm exec turbo run lint typecheck test build test:integration --force
+Tasks:    28 successful, 28 total
+Cached:   0 cached, 28 total
+
+$ pnpm audit --audit-level high
+No known vulnerabilities found
+
+$ sha256sum -c load/results/phase-5-results.sha256
+load/results/phase-5-results.md: OK
+```
+
+Test totals in the forced graph:
+
+- Unit: `@flash/load` **112**, `@flash/api` **181**, `@flash/worker` **115**,
+  `@flash/redis` **78**, `@flash/shared` **232**, and `@flash/web` **122**.
+- Integration: `@flash/api` **72** and `@flash/worker` **23**.
+- Overall: **66 files / 935 tests passed** across the uncached graph.
+
+Phase-specific disposition:
+
+- A14 focused security coverage passed **8/8**; the full `@flash/load` suite passed
+  **112/112**.
+- The deterministic implementation digest was stable twice at
+  `0388fd0a4a12ef2b032c95701aee1bd4ea605b60bcbdce5768ace714218ddbb8`.
+- The qualified results artifact digest is
+  `b8cea1aad39020b430f44b405bf2971f65f18ed8c014a3ae9f88e67bd54b5081`
+  after the gate's mechanical trailing-whitespace cleanup; the reviewed pre-cleanup
+  artifact digest was
+  `fefff2bff5616fc4c1bdb880a3f114ecea8b077b419cbd36ba24261c4d48d3a4`.
+- Dependency audit, both Compose renders, build outputs, formatting, static checks,
+  and `git diff --check` were clean.
+- The final defensive review returned **APPROVE**.
+- No `baseline-20260723-a5` artifact exists.
+- The live performance run and Phase 5 live I1–I4 audit were **NOT RUN / NOT
+  EVALUATED**. `/usr/bin/ln` is a regular mode-0755 executable owned by uid 65534,
+  which fails the frozen root-owned uid 0 helper prerequisite. Privileged remediation
+  was owner-declined, so tuning was not eligible and no live performance or invariant
+  verdict was published.
+
 ## Phase 1 design decisions worth defending (README §12 material)
 
 1. **Window enforcement (I3) lives INSIDE `purchase.lua`**, using Redis `TIME`, not in
@@ -366,20 +427,17 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
    scheduled poll.** The action remains bounded and non-overlapping, retains the last
    good values, and does not affect purchase or invariant enforcement. This is an
    accepted non-blocking medium frontend responsiveness risk for Phase 4.
+10. **Phase 5 live stress and its post-run I1–I4 audit were not executed on the
+    delivery host.** `/usr/bin/ln` is owned by uid 65534 rather than the frozen
+    required uid 0, and the owner authorized an environment-limited evidence bypass
+    instead of privileged host remediation. Phase 5 therefore makes no live
+    performance, capacity, threshold, or invariant claim.
 
 ## Exact next actions
 
 1. Have the Sol-mapped `architect` produce and freeze
-   `.claude/contracts/phase-5.md`. Do not begin stress implementation before the
-   contract fixes the scenarios, thresholds, audit semantics, and evidence format.
-2. Dispatch Phase 5 implementation to the k6 specialist/general implementer with the
-   project-local `k6`, Redis, and PostgreSQL skills loaded before editing.
-3. Implement the required surge, duplicate-buyer, sold-out, and window-edge stress
-   scenarios; add the post-run Redis/Postgres I1/I2 audit; tune only from measured
-   bottlenecks; and produce the contract-required results table.
-4. Run the canonical local forced graph plus the Phase 5 stress gate and invariant
-   audit, complete adversarial review, then have the orchestrator commit, create the
-   annotated `phase-5-done` tag, and update this file.
+   `.claude/contracts/phase-6.md`. Do not begin Phase 6 implementation before that
+   contract exists.
 
 ## Process notes
 
@@ -402,6 +460,15 @@ with a control demonstrating the harness detects the violation.
 
 ## Changelog
 
+- **`phase-5-done`** — Qualified Phase 5 stress harness and invariant-audit delivery.
+  The isolated k6 scenarios, deterministic runner, secure descriptor-only audit
+  publication, CI smoke path, Redis inspection support, and worker reconciliation
+  hardening passed A14 8/8, the full load suite 112/112, and the 28/28 uncached root
+  graph with 66 files / 935 tests. Dependency audit, Compose, build, format, static,
+  diff, digests, and final defensive review were clean. Qualified status:
+  **COMPLETE — OWNER-AUTHORIZED ENVIRONMENT-LIMITED EVIDENCE BYPASS**. Live
+  performance and Phase 5 live I1–I4 were **NOT RUN / NOT EVALUATED** because the
+  host's uid-65534 `/usr/bin/ln` fails the frozen uid 0 trust prerequisite.
 - **`phase-4-done`** — Responsive accessible Aurora flash-sale SPA. The frontend now
   provides server-time sale state/countdown, exact stock presentation, a fail-safe
   one-shot purchase flow, correlated reservation lookup, bounded generation-safe sale

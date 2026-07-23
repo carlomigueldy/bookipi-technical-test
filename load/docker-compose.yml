@@ -1,0 +1,131 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec']
+    ports:
+      - '127.0.0.1:${STRESS_REDIS_PORT:-6680}:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 256M
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flash
+      POSTGRES_PASSWORD: flash
+      POSTGRES_DB: flash
+    ports:
+      - '127.0.0.1:${STRESS_POSTGRES_PORT:-5543}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U flash -d flash']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 768M
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api.Dockerfile
+    environment: &application-environment
+      NODE_ENV: production
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://flash:flash@postgres:5432/flash
+      REDIS_URL: redis://redis:6379
+      SALE_ID: ${SALE_ID:-p5-contract-warm-r1}
+      SALE_NAME: ${SALE_NAME:-Phase 5 contract render}
+      SALE_STARTS_AT: ${SALE_STARTS_AT:-2026-01-01T00:00:00.000Z}
+      SALE_ENDS_AT: ${SALE_ENDS_AT:-2026-01-01T01:00:00.000Z}
+      SALE_TOTAL_STOCK: ${SALE_TOTAL_STOCK:-200}
+      ORDERS_QUEUE_NAME: orders
+      RATE_LIMIT_MAX: '1000000'
+      RATE_LIMIT_WINDOW_MS: '1000'
+      RATE_LIMIT_USER_MAX: '100'
+      RATE_LIMIT_USER_WINDOW_MS: '1000'
+      WORKER_CONCURRENCY: '16'
+      WORKER_PG_POOL_MAX: '10'
+      CORS_ORIGIN: http://127.0.0.1:${STRESS_API_PORT:-3300}
+    ports:
+      - '127.0.0.1:${STRESS_API_PORT:-3300}:3000'
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 768M
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infra/worker.Dockerfile
+    environment:
+      <<: *application-environment
+      WORKER_HEALTH_PORT: '3001'
+    ports:
+      - '127.0.0.1:${STRESS_WORKER_PORT:-3301}:3001'
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 768M
+
+  k6:
+    image: grafana/k6:1.7.1
+    profiles: ['k6']
+    user: '${PHASE5_K6_UID:?PHASE5_K6_UID is required}:${PHASE5_K6_GID:?PHASE5_K6_GID is required}'
+    read_only: true
+    environment:
+      API_URL: http://api:3000/api
+      HOME: /tmp/k6-home
+      XDG_CONFIG_HOME: /tmp/k6-home/.config
+      PHASE5_K6_UID: '${PHASE5_K6_UID:?PHASE5_K6_UID is required}'
+      PHASE5_K6_GID: '${PHASE5_K6_GID:?PHASE5_K6_GID is required}'
+      RUN_ID: ${STRESS_RUN_ID:-contract-render}
+      SALE_ID: ${SALE_ID:-p5-contract-warm-r1}
+      SCENARIO: ${K6_SCENARIO:-warmup}
+      SCENARIO_TOKEN: ${SCENARIO_TOKEN:-warm}
+      REPETITION: ${REPETITION:-1}
+      STARTS_AT_MS: ${STARTS_AT_MS:-1767225600000}
+      ENDS_AT_MS: ${ENDS_AT_MS:-1767229200000}
+      K6_RESULTS_DIR: /results
+      STRESS_PROFILE: ${STRESS_PROFILE:-full}
+    volumes:
+      - ./k6:/scripts:ro
+      - ${RAW_RESULT_DIR:-./results/raw/contract-render}:/results
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,mode=1777,size=64m
+    working_dir: /scripts
+    command: ['run', '/scripts/${K6_SCENARIO:-warmup}.js']
+    depends_on:
+      api: { condition: service_healthy }
+      worker: { condition: service_healthy }
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 3G
+
+volumes:
+  redisdata: {}
+  pgdata: {}

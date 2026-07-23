@@ -19,10 +19,11 @@ coverage/
 !.env.example
 
 # k6 load-test result artifacts
-load/k6/results/
-load/k6/*.summary.json
-k6-results.json
-k6-summary.json
+load/results/raw/
+load/results/**/*.tmp
+!load/results/.gitkeep
+!load/results/phase-5-results.md
+!load/results/phase-5-results.sha256
 
 # logs
 *.log

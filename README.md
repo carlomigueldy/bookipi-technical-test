@@ -4,11 +4,7 @@ A high-throughput flash sale backend + SPA: one limited-stock product, thousands
 of concurrent buyers, one confirmed order per user, correctness held even under
 surge load and partial failure.
 
-**This is a Phase 0 (bootstrap) README.** It covers what exists today — repo
-layout, local dev, and the verification commands. The full write-up (design
-choices, architecture diagram, stress-test guide, results table) is a **Phase 6**
-deliverable per `PRD.md` §8 and will replace/extend this file then. For the
-authoritative spec, read [`PRD.md`](./PRD.md) in full. For the build process,
+For the authoritative spec, read [`PRD.md`](./PRD.md) in full. For the build process,
 agent roster, and resume protocol, read [`AGENTS.md`](./AGENTS.md). For "where is
 the build right now," read [`STATE.md`](./STATE.md).
 
@@ -79,11 +75,23 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm test:integration   # passes with no integration tests present pre-Phase-2
-pnpm stress              # prints the Phase-5 placeholder pre-Phase-5, exits 0
+pnpm stress
 ```
 
 `docker compose -f infra/docker-compose.yml config -q` validates the compose file
 without starting anything, if Docker isn't available in your environment.
+
+## Phase 5 stress evidence
+
+Phase 5 live stress status: not run on the delivery host. Secure atomic audit publication requires
+a root-owned, non-group/world-writable /usr/bin/ln; this host reports uid 65534. The owner
+authorized skipping privileged host remediation. No Phase 5 rps, p95/p99, threshold, or live
+post-stress I1–I4 claim is made. On a compliant Linux host, run pnpm stress to produce those
+measurements; do not bypass the helper validation.
+
+The factual Phase 5 disposition and its one-file integrity manifest are in
+[`load/results/phase-5-results.md`](./load/results/phase-5-results.md) and
+[`load/results/phase-5-results.sha256`](./load/results/phase-5-results.sha256).
 
 ## Accepted risks — client-asserted identity
 

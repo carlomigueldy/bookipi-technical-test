@@ -102,6 +102,13 @@ export interface ReservationEntry {
   reservedAtMs: number | null;
 }
 
+export type ReservationMembershipOutcome = 'BOTH' | 'NEITHER' | 'BUYER_ONLY' | 'RESERVATION_ONLY';
+
+export interface ReservationMembershipInspection {
+  outcome: ReservationMembershipOutcome;
+  reservation: ReservationEntry | null;
+}
+
 /** Input to `restoreReservations` — a cold-rebuild record sourced from Postgres. */
 export interface ReservationRestoreInput {
   userId: string;

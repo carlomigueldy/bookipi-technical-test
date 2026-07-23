@@ -1,5 +1,9 @@
 import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
-import type { ReservationEntry, SaleRedisStore } from '@flash/redis';
+import type {
+  ReservationEntry,
+  ReservationMembershipInspection,
+  SaleRedisStore,
+} from '@flash/redis';
 import {
   ORDERS_JOB_ATTEMPTS,
   ORDERS_JOB_BACKOFF_DELAY_MS,
@@ -407,12 +411,6 @@ export class ReconciliationService implements OnApplicationShutdown {
     this.checkpoint(signal);
     const scan = await this.scanJobs(signal);
     const jobs = scan.jobs;
-    const jobsByUser = new Map<string, ScannedJob[]>();
-    for (const item of jobs) {
-      const values = jobsByUser.get(item.payload.userId) ?? [];
-      values.push(item);
-      jobsByUser.set(item.payload.userId, values);
-    }
 
     const recoveryIncidents: string[] = [];
     for (const order of orders) {
@@ -472,31 +470,18 @@ export class ReconciliationService implements OnApplicationShutdown {
       for (const userId of page.userIds) {
         this.checkpoint(signal);
         if (ledgerByUser.has(userId)) continue;
-        const row = byUser.get(userId);
-        const recoverableJob = (jobsByUser.get(userId) ?? []).find((item) =>
-          ['waiting', 'active', 'delayed', 'failed'].includes(item.state),
-        );
-        if (row?.status === 'persisted') {
-          await this.applyRecoveryCandidate(
-            { userId, reservationId: row.id, reservedAtMs: row.createdAtMs },
-            'persisted',
-            byUser,
+        const inspection = await this.store.inspectReservationMembership(this.env.SALE_ID, userId);
+        if (inspection.outcome !== 'BUYER_ONLY') {
+          await this.resolveBuyerInspection(
+            userId,
+            inspection,
+            ledgerByUser,
+            byUser.get(userId),
             recoveryIncidents,
           );
-        } else if (recoverableJob) {
-          await this.applyRecoveryCandidate(
-            {
-              userId,
-              reservationId: recoverableJob.payload.reservationId,
-              reservedAtMs: recoverableJob.payload.reservedAtMs,
-            },
-            'queue',
-            byUser,
-            recoveryIncidents,
-          );
-        } else if (row?.status === 'compensated')
-          await this.store.reconcileBuyerMembership(this.env.SALE_ID, userId);
-        else throw new Error(`unrecoverable buyer-only identity for ${userId}`);
+          continue;
+        }
+        await this.adjudicateBuyerOnly(userId, ledgerByUser, byUser, recoveryIncidents);
       }
     } while (buyerCursor !== '0');
 
@@ -523,11 +508,118 @@ export class ReconciliationService implements OnApplicationShutdown {
     return { degraded: queueIssueCount > 0 || recoveryIncidents.length > 0, queueIssueCount };
   }
 
+  private async resolveBuyerInspection(
+    userId: string,
+    inspection: ReservationMembershipInspection,
+    ledgerByUser: Map<string, ReservationEntry>,
+    durable: DurableOrder | undefined,
+    incidents: string[],
+    targetedJob?: Job | null,
+  ): Promise<void> {
+    if (inspection.outcome === 'NEITHER') return;
+    if (inspection.outcome === 'BUYER_ONLY') {
+      throw new Error(`unrecoverable buyer-only identity for ${userId}`);
+    }
+    const entry = inspection.reservation;
+    if (!entry) throw new Error(`reservation-bearing inspection omitted identity for ${userId}`);
+    if (inspection.outcome === 'BOTH') ledgerByUser.set(userId, entry);
+    const coverage = await this.ensureLiveReservationQueued(entry, durable, targetedJob);
+    if (coverage === 'RETAINED_COLLISION') {
+      if (targetedJob !== undefined) {
+        throw new Error(`unrecoverable buyer-only identity for ${userId}`);
+      }
+      incidents.push(`retained queue collision for ${userId}`);
+    }
+    if (inspection.outcome === 'RESERVATION_ONLY') {
+      const membership = await this.store.reconcileBuyerMembership(this.env.SALE_ID, userId);
+      if (membership !== 'PRESENT') {
+        throw new Error(`buyer membership repair failed for ${userId}`);
+      }
+    }
+    if (inspection.outcome === 'RESERVATION_ONLY') ledgerByUser.set(userId, entry);
+  }
+
+  private async adjudicateBuyerOnly(
+    userId: string,
+    ledgerByUser: Map<string, ReservationEntry>,
+    byUser: Map<string, DurableOrder>,
+    incidents: string[],
+  ): Promise<void> {
+    const fail = (): never => {
+      throw new Error(`unrecoverable buyer-only identity for ${userId}`);
+    };
+    const row = await this.repository.getByUser(userId);
+    const targeted = await this.queue.getJob(buildOrdersJobId(this.env.SALE_ID, userId));
+    let classified: ScannedJob | null = null;
+    if (targeted) {
+      const result = this.classifyQueueEntry(targeted, (await targeted.getState()) as JobType);
+      if ('issue' in result) {
+        fail();
+      } else {
+        classified = result.job;
+      }
+    }
+    const liveQueue =
+      classified && ['waiting', 'active', 'delayed', 'failed'].includes(classified.state)
+        ? classified
+        : null;
+    const persisted = row?.saleId === this.env.SALE_ID && row.status === 'persisted' ? row : null;
+    const queueCandidate =
+      liveQueue &&
+      liveQueue.payload.saleId === this.env.SALE_ID &&
+      liveQueue.payload.userId === userId
+        ? liveQueue
+        : null;
+    if (row?.saleId === this.env.SALE_ID) byUser.set(userId, row);
+
+    if (persisted && queueCandidate?.payload.reservationId !== undefined) {
+      if (queueCandidate.payload.reservationId !== persisted.id) fail();
+    }
+
+    if (persisted) {
+      byUser.set(userId, persisted);
+      await this.applyRecoveryCandidate(
+        { userId, reservationId: persisted.id, reservedAtMs: persisted.createdAtMs },
+        'persisted',
+        byUser,
+        incidents,
+        targeted,
+      );
+    } else if (queueCandidate) {
+      await this.applyRecoveryCandidate(
+        {
+          userId,
+          reservationId: queueCandidate.payload.reservationId,
+          reservedAtMs: queueCandidate.payload.reservedAtMs,
+        },
+        'queue',
+        byUser,
+        incidents,
+      );
+    } else if (row?.saleId === this.env.SALE_ID && row.status === 'compensated') {
+      const membership = await this.store.reconcileBuyerMembership(this.env.SALE_ID, userId);
+      if (membership !== 'ABSENT') fail();
+    } else {
+      fail();
+    }
+
+    const finalInspection = await this.store.inspectReservationMembership(this.env.SALE_ID, userId);
+    await this.resolveBuyerInspection(
+      userId,
+      finalInspection,
+      ledgerByUser,
+      byUser.get(userId),
+      incidents,
+      targeted,
+    );
+  }
+
   private async applyRecoveryCandidate(
     candidate: { userId: string; reservationId: string; reservedAtMs: number },
     source: 'persisted' | 'queue',
     byUser: Map<string, DurableOrder>,
     incidents: string[],
+    targetedJob?: Job | null,
   ): Promise<void> {
     const result = await this.store.compareAndRestoreReservation(this.env.SALE_ID, candidate);
     if (result.outcome !== 'CONFLICT') return;
@@ -545,6 +637,7 @@ export class ReconciliationService implements OnApplicationShutdown {
       const coverage = await this.ensureLiveReservationQueued(
         current,
         byUser.get(candidate.userId),
+        targetedJob,
       );
       if (coverage === 'RETAINED_COLLISION') {
         incidents.push(`retained queue collision for ${candidate.userId}`);
@@ -556,9 +649,10 @@ export class ReconciliationService implements OnApplicationShutdown {
   private async ensureLiveReservationQueued(
     live: ReservationEntry,
     durable: DurableOrder | undefined,
+    targetedJob?: Job | null,
   ): Promise<EnsureLiveQueueResult> {
     const jobId = buildOrdersJobId(this.env.SALE_ID, live.userId);
-    const current = await this.queue.getJob(jobId);
+    const current = targetedJob === undefined ? await this.queue.getJob(jobId) : targetedJob;
     if (!current) return this.enqueueLiveReservation(live, jobId);
 
     const classified = this.classifyQueueEntry(current, (await current.getState()) as JobType);
@@ -575,7 +669,9 @@ export class ReconciliationService implements OnApplicationShutdown {
       }
       if (state !== 'completed') return this.retainIdentityCollision(live, current, state);
       await current.remove();
-      return this.enqueueAfterRemoval(live, jobId);
+      return targetedJob === undefined
+        ? this.enqueueAfterRemoval(live, jobId)
+        : this.enqueueLiveReservation(live, jobId);
     }
 
     if (state === 'active') return this.retainIdentityCollision(live, current, state);
@@ -587,7 +683,9 @@ export class ReconciliationService implements OnApplicationShutdown {
       return this.retainIdentityCollision(live, current, state);
     }
     await current.remove();
-    return this.enqueueAfterRemoval(live, jobId);
+    return targetedJob === undefined
+      ? this.enqueueAfterRemoval(live, jobId)
+      : this.enqueueLiveReservation(live, jobId);
   }
 
   private async enqueueAfterRemoval(

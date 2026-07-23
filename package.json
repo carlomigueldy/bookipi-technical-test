@@ -16,7 +16,9 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "test:integration": "turbo run test:integration",
-    "stress": "node scripts/stress.mjs",
+    "stress": "node scripts/stress.mjs --profile full",
+    "stress:smoke": "node scripts/stress.mjs --profile smoke",
+    "stress:audit": "pnpm --filter @flash/load audit",
     "format": "prettier --write . --ignore-path .gitignore --ignore-path .prettierignore",
     "format:check": "prettier --check . --ignore-path .gitignore --ignore-path .prettierignore",
     "clean": "turbo run clean && rm -rf node_modules .turbo"

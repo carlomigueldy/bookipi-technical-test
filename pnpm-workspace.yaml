@@ -1,6 +1,7 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+  - 'load'
 allowBuilds:
   '@nestjs/core': true
   '@swc/core': true
