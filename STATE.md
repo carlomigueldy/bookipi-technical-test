@@ -30,8 +30,12 @@ frozen uid 0 trust prerequisite. The owner authorized proceeding without privile
 host remediation; no performance, capacity, threshold, or live invariant claim is
 made.
 
-**Phase 6 — Ship. NOT STARTED.** Next up: have the architect produce and freeze the
-Phase 6 contract.
+**Phase 6 — Ship. CLOSED.** (annotated tag `phase-6-done`; PRD delivery complete —
+no next phase.)
+Immutable candidate:
+`5373e20a6f8bb6932e4f4fe77d58dd3559ec51e1`. The shared and fresh-clone gates,
+mandatory final security review, and final architecture review are green. The
+state-closing commit is the commit resolved by `phase-6-done^{commit}`.
 
 ## Gate policy — READ THIS FIRST
 
@@ -65,9 +69,10 @@ Phase 6 contract.
 | `phase-3-done` | see `git rev-parse phase-3-done^{commit}` | Worker and durability gate passed                     |
 | `phase-4-done` | see `git rev-parse phase-4-done^{commit}` | Frontend gate passed                                  |
 | `phase-5-done` | see `git rev-parse phase-5-done^{commit}` | Qualified stress evidence gate passed                 |
+| `phase-6-done` | see `git rev-parse phase-6-done^{commit}` | Evaluator-ready delivery gate passed                  |
 
 Phase branches are cut from the **previous phase's tag**, not from `main`.
-Current branch: `phase-5/stress`.
+Current branch: `phase-6/ship`.
 
 > `phase-0-done` was moved once, deliberately: it originally pointed at `76059dc`,
 > which did **not** pass the gate (hollow build + vulnerable deps still present).
@@ -351,6 +356,158 @@ Phase-specific disposition:
   was owner-declined, so tuning was not eligible and no live performance or invariant
   verdict was published.
 
+## Phase 6 verification evidence
+
+Phase 6 closed from the verified immutable ship candidate. Candidate and publication
+identities:
+
+```text
+candidate commit: 5373e20a6f8bb6932e4f4fe77d58dd3559ec51e1
+state-closing commit: see git rev-parse phase-6-done^{commit}
+annotated phase-6-done tag: resolves to the state-closing commit above
+branch: phase-6/ship
+```
+
+All shared-checkout and disposable fresh-clone evidence below is bound to that exact
+candidate. No stress workload ran, and the one-user production-stack smoke is not a
+performance, capacity, latency-threshold, or Phase 5 live I1–I4 audit result.
+
+### Shared and fresh-clone gates
+
+Both the shared checkout and a local `--no-hardlinks` disposable clone detached at
+the exact candidate passed independently:
+
+```text
+pnpm install --frozen-lockfile: passed
+pnpm format:check: passed
+forced Turbo graph: 28 successful, 28 total
+Turbo cache: 0 cached, 28 total
+Playwright: 28/28 passed across desktop and mobile Chromium
+dependency audit: no known vulnerabilities
+A14 focused security suite: 8/8 passed
+API, worker, shared, and web build assertions: passed
+ordinary and load Compose renders: passed
+load/results/phase-5-results.md: OK
+```
+
+The forced graph included API integration **72/72**, including three real-HTTP
+iterations of exactly **10 CONFIRMED / 490 SOLD_OUT**, and worker failure-mode
+integration **23/23**. The clone started clean at the exact candidate with no
+`.codex/` or `.env`; the shared checkout remained at the exact candidate with only
+the pre-existing, untracked, untouched `.codex/`.
+
+Fresh-clone provenance:
+
+```text
+Node: v22.22.1
+pnpm: 11.9.0
+Docker: Docker version 29.5.3, build d1c06ef
+Docker Compose: Docker Compose version v5.1.4
+```
+
+The disposable path was created from the validated
+`/tmp/bookipi-phase6-fresh.XXXXXX` template and removed during guaranteed cleanup;
+it is provenance, not a reusable artifact.
+
+### A3 supply-chain, build, and image proof
+
+The uncached API build-stage inspection passed at candidate tag
+`bookipi-phase6-context:5373e20a6f8b`. Its log showed the checksum-fixed pnpm
+tarball SHA-256
+`2b567aa66026238078ac2e0a33bec3febd60e962987aac697456f3180819b287`
+and the executed version assertion `test 11.9.0 = 11.9.0`. Inspection image ID:
+`sha256:c2ae8e2b3744731ef4ca5c2614c1011eb06776bb8fdab5531da26579f8f3d96f`.
+
+The build context excluded `.env`, `.env.production`, `.codex`, `.git`, the host
+`node_modules` sentinel, and the raw-results sentinel. The build stage contained the
+Redis workspace manifest and nonempty API output. All three production images then
+built without cache, and Compose started all five services healthy with `--no-build`
+and a bounded 180-second wait.
+
+A3 provenance and containment checks passed:
+
+- ordinary Redis and Postgres rendered `HostIp` as `127.0.0.1`;
+- Redis resolved to OCI index digest
+  `sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99`;
+- Postgres resolved to OCI index digest
+  `sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`;
+- the k6 remote index was
+  `sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f`;
+- all reviewed runtime, service, and k6 references were multi-platform OCI index
+  digest pins;
+- all environment variants except `.env.example` were excluded from Git and Docker
+  contexts.
+
+Runtime image IDs and content assertions:
+
+```text
+API:    sha256:818b00c91b5c0f037719f42fe42eb91a7232d9c49f0db19ce066b62cbbf84cc1
+worker: sha256:f17bb8cf97194c8d10d2d2123d96c98c876f3fdc6c50716d77052f05079c8026
+web:    sha256:288f4396b565a6f697901c204d78170246a16422aa8cb52acc349d71777af3ea
+```
+
+API and worker ran as `node`, contained exactly `dist`, `node_modules`, and
+`package.json` under `/app`, and had no source or protected documentation/state.
+The web image contained only the required built static assets, with no TypeScript
+or source maps. Runtime environment, history, secret, URL-whitelist, active-content,
+and sentinel checks were clean.
+
+### Fresh-clone production invariant flow
+
+The production stack used sale
+`phase6-5373e20a6f8b-20260723082341`, active stock **3/3**, and user
+`phase6-fresh-user`:
+
+- first real HTTP purchase returned **201 CONFIRMED**, with remaining stock **2**;
+- status polling returned `purchased: true` and `order.status: persisted`;
+- the identical second purchase returned **409 ALREADY_PURCHASED**, never 201;
+- final sale status remained active at exactly **2/3** stock;
+- Redis reported stock **2**, buyer membership **1**, and the reservation ledger
+  entry present;
+- Postgres contained exactly one persisted order, zero duplicate user groups, and
+  the `orders_user_id_uniq` index;
+- API and worker readiness remained HTTP 200.
+
+This proves candidate-bound one-reservation functional continuity across I1–I4. It
+does not replace the real-Redis concurrency, exact-window, or worker failure-mode
+suites and does not repair or reclassify the Phase 5 evidence limitation.
+
+### Cleanup and reviews
+
+Four proof-created anonymous volumes passed every frozen provenance predicate and
+were removed individually without force. The disposable clone, exact inspection
+image, Compose project, and proof-created resources were removed. Before/after
+byte-sorted sets were identical:
+
+```text
+containers: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+networks:   ed14fca61c265101fd5bea5b50d93225126a2c3720f978317cb2382b41badea3
+volumes:    22ca1793f260d00b9419b179c8edbd1444f3f8a6c7a38e57565dc85c78a27cc9
+images:     0595269d630cd0156e91e6c82549f20f030b4352dc35b3a6e51da5b94dc4018c
+target ports: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+No proof process remained on ports 3000, 3001, 5173, 5433, or 6380. The shared
+checkout stayed clean except for the untouched `.codex/`.
+
+The final Phase 6 security reviewer approved the exact candidate with the frozen A3
+wording:
+
+> APPROVE — Phase 6 ship surface preserves I1–I4; ordinary datastore ports are
+> loopback-only; all environment variants except .env.example are excluded from Git
+> and Docker contexts; runtime, service, and k6 images are pinned to reviewed
+> multi-platform OCI index digests; the pnpm bootstrap is checksum-fixed and
+> version-checked; and production datastore isolation, Postgres secret credentials,
+> and Redis ACL/TLS requirements are disclosed without claiming local enforcement.
+
+The final Phase 6 architect approved the exact candidate, evidence, security
+approval, and this ledger disclosure with the frozen wording:
+
+> APPROVE — Phase 6 is evaluator-ready: the README and diagrams describe the
+> shipped interfaces and failure model, the committed candidate passed uncached and
+> fresh-clone production proofs with complete cleanup, Phase 5 remains truthfully
+> qualified, and no PRD deliverable or I1–I4 obligation is silently omitted.
+
 ## Phase 1 design decisions worth defending (README §12 material)
 
 1. **Window enforcement (I3) lives INSIDE `purchase.lua`**, using Redis `TIME`, not in
@@ -416,8 +573,11 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
    public injection path, but an operator-corrupted entry may repeat bounded error logs
    until repaired. This is accepted and non-blocking because fail-closed retention is
    required for I4; production should alert and rate-limit duplicate log emission.
-6. **`.dockerignore` correctness remains unverified from a cold clone** (carried from
-   Phase 0); confirm image contents at Phase 6.
+6. **Production images and build-context exclusion are now cold-clone verified.**
+   The remaining production requirement is operational: use private, unpublished
+   datastores, secret-managed non-default Postgres credentials, and Redis ACL/TLS.
+   The loopback-only local Compose defaults are development conveniences, not
+   production authentication.
 7. **Node/pnpm pins remain tight:** Node 22.14.x and pnpm 11.9.x. Do not lower either
    without checking the other. NodeNext now requires runtime dependencies to expose a
    CommonJS `require` condition; see Phase 2 Amendment A1.
@@ -435,9 +595,9 @@ major. Both criticals were design-level, exactly the kind that get expensive lat
 
 ## Exact next actions
 
-1. Have the Sol-mapped `architect` produce and freeze
-   `.claude/contracts/phase-6.md`. Do not begin Phase 6 implementation before that
-   contract exists.
+None — PRD delivery is complete. An optional compliant-host stress rerun requires a
+new architect-declared run ID and a versioned results amendment; it must not rewrite
+the qualified Phase 5 record.
 
 ## Process notes
 
@@ -460,6 +620,15 @@ with a control demonstrating the harness detects the violation.
 
 ## Changelog
 
+- **`phase-6-done` — Phase 6 evaluator-ready delivery gate.** Candidate
+  `5373e20a6f8bb6932e4f4fe77d58dd3559ec51e1` ships the complete evaluator README and
+  diagram, minimal production images, environment containment, loopback datastore
+  publication, reviewed digest pins, and checksum-fixed pnpm bootstrap. Shared and
+  fresh-clone gates each passed 28/28 uncached Turbo tasks and Playwright 28/28;
+  A14 8/8, audit, Compose, build output, checksum, runtime-image, one-reservation
+  persistence/duplicate/stock, and byte-equal cleanup proofs passed. Final security
+  and architecture reviews approved. The annotated tag resolves to this ledger's
+  state-closing commit; PRD delivery is complete with no next phase.
 - **`phase-5-done`** — Qualified Phase 5 stress harness and invariant-audit delivery.
   The isolated k6 scenarios, deterministic runner, secure descriptor-only audit
   publication, CI smoke path, Redis inspection support, and worker reconciliation
