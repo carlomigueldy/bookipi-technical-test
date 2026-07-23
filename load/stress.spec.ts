@@ -29,6 +29,7 @@ const {
   command,
   computeImplementationDigest,
   createChildRegistry,
+  formatResultsMarkdown,
   formatComposeLogEvidence,
   formatRedisSlowlogEvidence,
   normalizeDockerStats,
@@ -219,6 +220,105 @@ class FakeChild extends EventEmitter {
 }
 
 describe('A5 harness hardening', () => {
+  it('P2 — local Compose and CI smoke request the exact p99 summary trend fields', async () => {
+    const expected = '--summary-trend-stats=avg,min,med,max,p(90),p(95),p(99)';
+    const [compose, workflow] = await Promise.all([
+      readFile(new URL('./docker-compose.yml', import.meta.url), 'utf8'),
+      readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+    ]);
+    expect(compose).toContain(expected);
+    expect(workflow).toContain(`k6 run ${expected} load/k6/smoke.js`);
+  });
+
+  it('P2 — generated table fails closed for a missing p99 and labels configured targets truthfully', () => {
+    const results = [
+      {
+        definition: { scenario: 'smoke', repetition: 1 },
+        saleId: 'p5-12345678-smoke-r1',
+        scenarioDir: '/tmp/phase5-smoke',
+        summary: {
+          phase5: {
+            target: 200,
+            outcomes: {
+              confirmed: 200,
+              duplicate: 0,
+              soldOut: 0,
+              notStarted: 0,
+              ended: 0,
+            },
+          },
+          metrics: {
+            http_reqs: { values: { rate: 212 } },
+            dropped_iterations: { values: { count: 0 } },
+            http_req_failed: { values: { rate: 0 } },
+            'http_req_duration{name:purchase}': { values: { 'p(95)': 4 } },
+            'http_req_duration{name:sale_status}': { values: { 'p(95)': 2 } },
+          },
+        },
+        audit: {
+          pass: true,
+          postgres: { persisted: 200, compensated: 0 },
+          redis: { stock: 0 },
+          invariants: Object.fromEntries(
+            ['I1', 'I2', 'I3', 'I4'].map((key) => [key, { pass: true }]),
+          ),
+        },
+      },
+    ];
+    const markdown = formatResultsMarkdown(
+      {
+        profile: 'smoke',
+        baseCommit: 'base',
+        digest: 'digest',
+        pnpmVersion: '11.9.0',
+        dockerVersion: 'x',
+        composeVersion: 'x',
+      },
+      results,
+    );
+    expect(markdown).toContain('| Scenario | Rep | Configured target | Observed HTTP req/s |');
+    expect(markdown).toContain(
+      "Arrival-rate targets are purchase attempts/s; duplicate storm's configured target is 50,000 total purchase attempts; observed HTTP req/s includes additive observer traffic.",
+    );
+    expect(markdown).not.toContain('Target purchase/s');
+    expect(markdown).not.toContain('Achieved purchase/s');
+    expect(markdown).toContain('| smoke | 1 | 200 | 212 | 0 | 0.000 | 4 | MISSING | 2 |');
+  });
+
+  it('A11 — every workload buyer prefix is deterministic, valid, bounded, and repetition-scoped', async () => {
+    const workloads = [
+      ['warmup', 'warm', 'c'],
+      ['smoke', 'smoke', 'c'],
+      ['surge', 'surge', 'c'],
+      ['duplicate-storm', 'dup', 'cfg'],
+      ['sold-out', 'sold', 'c'],
+      ['window-edge', 'edge', 'cfg'],
+    ] as const;
+    const runId = '20260723000000-deadbeef';
+    const repetitions = [1, 2, 3];
+
+    for (const [workload, token, configName] of workloads) {
+      const source = await readFile(new URL(`./k6/${workload}.js`, import.meta.url), 'utf8');
+      const compact = source.replaceAll(/\s/g, '');
+      expect(compact).toContain(
+        `userId(\`p5_\${${configName}.runId.slice(-8)}_${token}_r\${${configName}.repetition}\`,`,
+      );
+
+      const identifiers = repetitions.map(
+        (repetition) =>
+          `p5_${runId.slice(-8)}_${token}_r${repetition}_${String(42).padStart(6, '0')}`,
+      );
+      expect(new Set(identifiers)).toHaveLength(repetitions.length);
+      for (const identifier of identifiers) {
+        expect(identifier).toMatch(/^[a-zA-Z0-9._@-]+$/);
+        expect(identifier.trim()).toBe(identifier);
+        expect(identifier.length).toBeGreaterThanOrEqual(3);
+        expect(identifier.length).toBeLessThanOrEqual(64);
+      }
+      expect(identifiers[0]).toBe(`p5_deadbeef_${token}_r1_000042`);
+    }
+  });
+
   it('A5 — post-initial worker 503 fails even when terminal audit is healthy', async () => {
     const directory = await samplerFixture({ worker: [httpRow(iso(2), { status: 'error' }, 503)] });
     await expect(validateSamplerEvidence(directory, iso(1))).rejects.toThrow(

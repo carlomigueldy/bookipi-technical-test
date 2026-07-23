@@ -45,7 +45,7 @@ export const options = {
 
 export function buy() {
   const cfg = config();
-  const user = userId(`p5_${cfg.runId.slice(-8)}_dup`, scenario.iterationInTest);
+  const user = userId(`p5_${cfg.runId.slice(-8)}_dup_r${cfg.repetition}`, scenario.iterationInTest);
   const requests = Array.from({ length: 10 }, () => ({
     method: 'POST',
     url: `${cfg.apiUrl}/purchase`,

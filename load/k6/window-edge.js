@@ -45,7 +45,7 @@ export const options = {
 export function buy() {
   const cfg = config();
   purchaseAtWindow(
-    userId(`p5_${cfg.runId.slice(-8)}_edge`, scenario.iterationInTest),
+    userId(`p5_${cfg.runId.slice(-8)}_edge_r${cfg.repetition}`, scenario.iterationInTest),
     cfg.startsAtMs,
     cfg.endsAtMs,
   );

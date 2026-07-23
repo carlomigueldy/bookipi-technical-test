@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "runId": "20260723142302-6a2bc45c",
+  "scenario": "warmup",
+  "saleId": "p5-6a2bc45c-warm-r1",
+  "auditedAt": "2026-07-23T14:25:26.693Z",
+  "expectedConfirmed": 200,
+  "convergence": {
+    "elapsedMs": 339,
+    "apiReady": true,
+    "workerReady": true,
+    "queue": {
+      "waiting": 0,
+      "active": 0,
+      "delayed": 0,
+      "failed": 0
+    },
+    "matchingSnapshots": 2,
+    "stableIntervalMs": 279,
+    "finalLiveCollection": true,
+    "successfulCollections": 4,
+    "collectionFailures": 0
+  },
+  "postgres": {
+    "totalStock": 200,
+    "persisted": 200,
+    "compensated": 0,
+    "reserved": 0,
+    "duplicateUsersGlobal": 0,
+    "duplicateUsersInSale": 0,
+    "outsideWindow": 0
+  },
+  "redis": {
+    "stock": 0,
+    "buyers": 200,
+    "reservations": 200,
+    "metricsConfirmed": 200
+  },
+  "invariants": {
+    "I1": {
+      "pass": true,
+      "evidence": ["stock=0, reservations=200, total=200", "persisted=200, expected=200"]
+    },
+    "I2": {
+      "pass": true,
+      "evidence": [
+        "globalDuplicates=0, saleDuplicates=0",
+        "buyers=200, reservations=200, persistedUsers=200"
+      ]
+    },
+    "I3": {
+      "pass": true,
+      "evidence": ["outsideWindow=0, startsAtMs=1784816525608, endsAtMs=1784818325608"]
+    },
+    "I4": {
+      "pass": true,
+      "evidence": [
+        "confirmed=200, persisted=200, compensated=0, reserved=0",
+        "queue=0/0/0/0, matchingSnapshots=2, stableIntervalMs=279, finalLiveCollection=true",
+        "identitiesMatch=true, configEqual=true, ledgerErrors=0"
+      ]
+    }
+  },
+  "pass": true
+}

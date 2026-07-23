@@ -45,11 +45,14 @@ export const options = {
 };
 export function buy() {
   const c = config();
-  purchase(userId(`p5_${c.runId.slice(-8)}_surge`, scenario.iterationInTest % 50000), {
-    201: 'CONFIRMED',
-    409: 'ALREADY_PURCHASED',
-    410: 'SOLD_OUT',
-  });
+  purchase(
+    userId(`p5_${c.runId.slice(-8)}_surge_r${c.repetition}`, scenario.iterationInTest % 50000),
+    {
+      201: 'CONFIRMED',
+      409: 'ALREADY_PURCHASED',
+      410: 'SOLD_OUT',
+    },
+  );
 }
 export function observeStatus() {
   saleStatus();
