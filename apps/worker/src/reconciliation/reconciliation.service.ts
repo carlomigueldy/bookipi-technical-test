@@ -124,6 +124,7 @@ export class ReconciliationService implements OnApplicationShutdown {
   private passPromise: Promise<void> | null = null;
   private passCoalesced = false;
   private dlqPromise: Promise<void> | null = null;
+  private maintenanceTail: Promise<void> = Promise.resolve();
   private failedScanOffset = 0;
   private readonly bootController = new AbortController();
   private startPromise: Promise<void> | null = null;
@@ -249,7 +250,12 @@ export class ReconciliationService implements OnApplicationShutdown {
 
   triggerDlqSweep(): Promise<void> {
     if (this.closing) return Promise.resolve();
-    this.dlqPromise ??= this.sweepFailed(this.bootController.signal)
+    this.dlqPromise ??= this.scheduleMaintenance(() =>
+      this.repository.withSessionReconciliationLock(
+        () => this.sweepFailed(this.bootController.signal),
+        this.bootController.signal,
+      ),
+    )
       .then((result) => {
         if (result.retainedUnsafeCount > 0) {
           this.state.retainedQueueEntries = Math.max(
@@ -388,9 +394,8 @@ export class ReconciliationService implements OnApplicationShutdown {
     this.logger.log({ event: 'reconciliation.started' });
     try {
       const signal = this.bootController.signal;
-      const result = await this.repository.withSessionReconciliationLock(
-        () => this.runDiff(signal),
-        signal,
+      const result = await this.scheduleMaintenance(() =>
+        this.repository.withSessionReconciliationLock(() => this.runDiff(signal), signal),
       );
       this.state.retainedQueueEntries = result.queueIssueCount;
       this.state.reconciliationHealthy = !result.degraded;
@@ -400,6 +405,15 @@ export class ReconciliationService implements OnApplicationShutdown {
       this.fail(error);
       throw error;
     }
+  }
+
+  private scheduleMaintenance<T>(work: () => Promise<T>): Promise<T> {
+    const scheduled = this.maintenanceTail.then(work, work);
+    this.maintenanceTail = scheduled.then(
+      () => undefined,
+      () => undefined,
+    );
+    return scheduled;
   }
 
   private async runDiff(
@@ -893,6 +907,7 @@ export class ReconciliationService implements OnApplicationShutdown {
         this.checkpoint(signal);
         for (const job of page) {
           this.checkpoint(signal);
+          if (job == null) continue;
           const classified = this.classifyQueueEntry(job, state);
           if ('issue' in classified) {
             issues.push(classified.issue);

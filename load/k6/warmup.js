@@ -43,7 +43,7 @@ export const options = {
 };
 export function buy() {
   const c = config();
-  purchase(userId(`p5_${c.runId.slice(-8)}_warm`, scenario.iterationInTest), {
+  purchase(userId(`p5_${c.runId.slice(-8)}_warm_r${c.repetition}`, scenario.iterationInTest), {
     201: 'CONFIRMED',
     410: 'SOLD_OUT',
   });

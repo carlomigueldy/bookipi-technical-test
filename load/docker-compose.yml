@@ -116,7 +116,12 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,mode=1777,size=64m
     working_dir: /scripts
-    command: ['run', '/scripts/${K6_SCENARIO:-warmup}.js']
+    command:
+      [
+        'run',
+        '--summary-trend-stats=avg,min,med,max,p(90),p(95),p(99)',
+        '/scripts/${K6_SCENARIO:-warmup}.js',
+      ]
     depends_on:
       api: { condition: service_healthy }
       worker: { condition: service_healthy }

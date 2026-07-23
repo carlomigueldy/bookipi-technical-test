@@ -1612,7 +1612,7 @@ async function implementationState() {
 function metric(summary, name, field) {
   return summary.metrics?.[name]?.values?.[field];
 }
-async function writeResults(config, results) {
+export function formatResultsMarkdown(config, results) {
   const warmup = results.filter((result) => result.definition.scenario === 'warmup');
   const measured = results.filter((result) =>
     MEASURED_STRESS_SCENARIOS.includes(result.definition.scenario),
@@ -1679,12 +1679,14 @@ async function writeResults(config, results) {
   const preflight = warm
     ? `Warmup preflight: ${warm.audit.pass ? 'PASS' : 'FAIL'} | sale=${warm.saleId} | confirmed=${warm.summary.phase5.outcomes.confirmed} | audit=${relative(root, resolve(warm.scenarioDir, 'audit.json'))}`
     : 'Warmup preflight: not applicable (smoke profile)';
-  const header = `# Phase 5 stress results\n\nUTC date: ${new Date().toISOString()}  \nBase commit: ${config.baseCommit}  \nImplementation digest: ${config.digest}  \nRuntime: Node ${process.version}; pnpm ${config.pnpmVersion}; Docker ${config.dockerVersion}; Compose ${config.composeVersion}; k6 1.7.1  \nHardware: ${os.cpus().length} logical CPUs; ${os.totalmem()} bytes RAM  \nResources: Redis 1 CPU/256 MiB; Postgres 2 CPU/768 MiB; API 4 CPU/768 MiB; worker 2 CPU/768 MiB; k6 4 CPU/3 GiB  \nProfile/repetitions: ${config.profile}/${config.profile === 'full' ? 3 : 1}  \nLocal Docker baseline; not a production capacity claim.  \nTuning state: none required unless baseline evidence dispatches T1.  \nCI not run: owner-authorized billing bypass.\n\n${preflight}\n\n| Scenario | Rep | Target purchase/s | Achieved purchase/s | Dropped | HTTP failed % | Purchase p95 ms | Purchase p99 ms | Status p95 ms | Confirmed | Duplicate | Sold out | Window rejected | PG persisted | PG compensated | Redis stock | I1 | I2 | I3 | I4 |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |\n`;
+  const header = `# Phase 5 stress results\n\nUTC date: ${new Date().toISOString()}  \nBase commit: ${config.baseCommit}  \nImplementation digest: ${config.digest}  \nRuntime: Node ${process.version}; pnpm ${config.pnpmVersion}; Docker ${config.dockerVersion}; Compose ${config.composeVersion}; k6 1.7.1  \nHardware: ${os.cpus().length} logical CPUs; ${os.totalmem()} bytes RAM  \nResources: Redis 1 CPU/256 MiB; Postgres 2 CPU/768 MiB; API 4 CPU/768 MiB; worker 2 CPU/768 MiB; k6 4 CPU/3 GiB  \nProfile/repetitions: ${config.profile}/${config.profile === 'full' ? 3 : 1}  \nLocal Docker baseline; not a production capacity claim.  \nTuning state: none required unless baseline evidence dispatches T1.  \nCI not run: owner-authorized billing bypass.\n\n${preflight}\n\nArrival-rate targets are purchase attempts/s; duplicate storm's configured target is 50,000 total purchase attempts; observed HTTP req/s includes additive observer traffic.\n\n| Scenario | Rep | Configured target | Observed HTTP req/s | Dropped | HTTP failed % | Purchase p95 ms | Purchase p99 ms | Status p95 ms | Confirmed | Duplicate | Sold out | Window rejected | PG persisted | PG compensated | Redis stock | I1 | I2 | I3 | I4 |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |\n`;
   const rows = [...rowData, ...aggregateRows].map((row) => `| ${row.values.join(' | ')} |`);
-  await writeFile(
-    resolve(root, 'load/results/phase-5-results.md'),
-    `${header}${rows.join('\n')}\n`,
-  );
+  return `${header}${rows.join('\n')}\n`;
+}
+
+async function writeResults(config, results) {
+  const markdown = formatResultsMarkdown(config, results);
+  await writeFile(resolve(root, 'load/results/phase-5-results.md'), markdown);
   const inputs = [
     resolve(root, 'load/results/phase-5-results.md'),
     ...results.flatMap((result) =>

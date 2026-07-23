@@ -170,6 +170,127 @@ describe('ReconciliationService', () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
+  it('serializes full reconciliation and standalone DLQ compensation so a stale queue identity cannot be restored after compensation', async () => {
+    const { service, queue, repository, store } = makeService();
+    const totalStock = 1;
+    let stock = 0;
+    const activeReservations = new Map([[payload.userId, R1]]);
+    const compensatedReservations = new Set<string>();
+    let failedJobVisible = true;
+    let failedJobRemovals = 0;
+    let releaseCandidate!: () => void;
+    const candidateReleased = new Promise<void>((resolve) => {
+      releaseCandidate = resolve;
+    });
+    let signalCandidateCaptured!: () => void;
+    const candidateCaptured = new Promise<void>((resolve) => {
+      signalCandidateCaptured = resolve;
+    });
+    let activeScheduledMaintenanceWork = 0;
+    let maximumConcurrentScheduledMaintenanceWork = 0;
+
+    const failedJob = queueJob(R1, 'failed', {
+      getState: vi.fn(async () => (failedJobVisible ? 'failed' : 'completed')),
+      remove: vi.fn(async () => {
+        failedJobVisible = false;
+        failedJobRemovals += 1;
+      }),
+    });
+    queue.getJobs.mockImplementation(async (states, start) => {
+      if ((states as string[])[0] !== 'failed' || start !== 0 || !failedJobVisible) return [];
+      return [failedJob];
+    });
+    queue.getFailedCount.mockImplementation(async () => (failedJobVisible ? 1 : 0));
+
+    repository.withSessionReconciliationLock.mockImplementation(
+      async (work: () => Promise<unknown>) => {
+        activeScheduledMaintenanceWork += 1;
+        maximumConcurrentScheduledMaintenanceWork = Math.max(
+          maximumConcurrentScheduledMaintenanceWork,
+          activeScheduledMaintenanceWork,
+        );
+        try {
+          return await work();
+        } finally {
+          activeScheduledMaintenanceWork -= 1;
+        }
+      },
+    );
+    store.compareAndRestoreReservation.mockImplementation(
+      async (_saleId: string, unknownCandidate: unknown) => {
+        const candidate = unknownCandidate as { userId: string; reservationId: string };
+        signalCandidateCaptured();
+        await candidateReleased;
+        if (activeReservations.get(candidate.userId) !== candidate.reservationId) {
+          throw new Error('stale recovery candidate restored after compensation');
+        }
+        return { outcome: 'ALREADY_MATCHED', current: candidate };
+      },
+    );
+    store.reconcileStockFromReservations.mockImplementation(async () => {
+      if (
+        stock !== 0 ||
+        activeReservations.size !== 1 ||
+        activeReservations.get(payload.userId) !== R1
+      ) {
+        throw new Error('full pass did not observe the live U1/R1 reservation');
+      }
+      return { outcome: 'RECONCILED' };
+    });
+    store.compensate.mockImplementation(async (...args: unknown[]) => {
+      const [, userId, reservationId] = args as [string, string, string];
+      if (activeReservations.get(userId) !== reservationId) {
+        return { outcome: 'COMPENSATION_NOOP', stockRemaining: stock };
+      }
+      activeReservations.delete(userId);
+      stock += 1;
+      return { outcome: 'COMPENSATED', stockRemaining: stock };
+    });
+    repository.resolveFailed.mockImplementation(async (...args: unknown[]) => {
+      const [failed, compensate] = args as [
+        { reservationId: string },
+        () => Promise<{ outcome: string; stockRemaining: number }>,
+      ];
+      const compensation = await compensate();
+      if (compensation.outcome !== 'COMPENSATED') {
+        throw new Error('expected U1/R1 compensation during terminal resolution');
+      }
+      if (stock !== 1 || activeReservations.size !== 0) {
+        throw new Error('compensation did not release exactly one unit');
+      }
+      activeReservations.set('user-002', R2);
+      stock -= 1;
+      compensatedReservations.add(failed.reservationId);
+      return 'compensated';
+    });
+
+    const pass = service.triggerPass();
+    await candidateCaptured;
+    const sweep = service.triggerDlqSweep();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(repository.resolveFailed).not.toHaveBeenCalled();
+    expect(store.compensate).not.toHaveBeenCalled();
+    expect(repository.withSessionReconciliationLock).toHaveBeenCalledOnce();
+    expect(maximumConcurrentScheduledMaintenanceWork).toBe(1);
+
+    releaseCandidate();
+    await expect(Promise.all([pass, sweep])).resolves.toEqual([undefined, undefined]);
+
+    expect(activeReservations).toEqual(new Map([['user-002', R2]]));
+    expect(activeReservations.size).toBe(1);
+    expect(stock).toBe(0);
+    expect(stock + activeReservations.size).toBe(totalStock);
+    expect(compensatedReservations).toEqual(new Set([R1]));
+    expect(activeReservations.has(payload.userId)).toBe(false);
+    expect(repository.resolveFailed).toHaveBeenCalledOnce();
+    expect(store.compensate).toHaveBeenCalledOnce();
+    expect(failedJobRemovals).toBe(1);
+    expect(repository.withSessionReconciliationLock).toHaveBeenCalledTimes(2);
+    expect(maximumConcurrentScheduledMaintenanceWork).toBe(1);
+  });
+
   it('classifies invalid entries independently and continues later pages and states', async () => {
     const { service, queue } = makeService();
     const badName = queueJob(R1, 'waiting', { name: 'wrong', id: 'bad-name' });
@@ -199,6 +320,52 @@ describe('ReconciliationService', () => {
     expect(
       queue.getJobs.mock.calls.every((call) => (call[2] as number) - (call[1] as number) + 1 <= 2),
     ).toBe(true);
+  });
+
+  it('skips a vanished BullMQ page entry while classifying adjacent work and repairing the ledger', async () => {
+    const { service, queue, store } = makeService();
+    const valid = queueJob(R1, 'waiting');
+    const unpersistedReservation = {
+      userId: 'user-002',
+      reservationId: R2,
+      reservedAtMs: 456,
+    };
+    queue.getJobs.mockImplementation(async (states, start) => {
+      if ((states as string[])[0] === 'waiting' && start === 0) return [undefined, valid];
+      return [];
+    });
+    queue.add.mockImplementation(async (_name, data) =>
+      queueJob(R2, 'waiting', {
+        id: 'flash-2026-user-002',
+        data,
+      }),
+    );
+    store.scanReservations.mockResolvedValue({
+      cursor: '0',
+      entries: [unpersistedReservation],
+    } as never);
+
+    const scan = await (
+      service as unknown as {
+        scanJobs(): Promise<{
+          jobs: Array<{ payload: { reservationId: string } }>;
+          issues: unknown[];
+        }>;
+      }
+    ).scanJobs();
+    expect(scan.issues).toEqual([]);
+    expect(scan.jobs.map((job) => job.payload.reservationId)).toEqual([R1]);
+
+    await expect(runDiff(service)).resolves.toEqual({ degraded: false, queueIssueCount: 0 });
+    expect(store.compareAndRestoreReservation).toHaveBeenCalledWith(
+      payload.saleId,
+      expect.objectContaining({ reservationId: R1 }),
+    );
+    expect(queue.add).toHaveBeenCalledWith(
+      'persist-order',
+      expect.objectContaining(unpersistedReservation),
+      expect.any(Object),
+    );
   });
 
   it('keeps a BullMQ page-read failure operational', async () => {
