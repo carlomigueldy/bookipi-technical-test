@@ -17,7 +17,7 @@ deployment.
 | Architecture and correctness | [Architecture](#architecture) and [invariants](#invariants-and-enforcement)                                                             |
 | Run the system               | [Complete Docker stack](#run-path-a-complete-docker-stack) or [source mode](#run-path-b-source-mode)                                    |
 | Test strategy                | [Verification and testing](#verification-and-testing)                                                                                   |
-| Load harness and evidence    | [Stress guide](#stress-guide-and-qualified-phase-5-result)                                                                              |
+| Load harness and evidence    | [Stress guide](#stress-guide-and-evidence)                                                                                              |
 | Engineering choices          | [Design decisions and trade-offs](#design-decisions-and-trade-offs)                                                                     |
 | Delivery limits              | [Security and accepted risks](#security-accepted-risks-and-production-follow-ups) and [current status](#ci-and-current-delivery-status) |
 
@@ -91,7 +91,14 @@ integrity manifest in
 - pnpm `11.9.0`
 - Docker Engine or Docker Desktop with Compose v2
 - `curl` for command-line smoke checks
-- Chromium only for the optional Playwright browser gate
+- Playwright Chromium for the canonical browser gate (not required for the
+  Docker-only quickstart)
+
+Install the browser before running the canonical gate:
+
+```bash
+pnpm --filter @flash/web exec playwright install chromium
+```
 
 Use [`.env.example`](./.env.example) as the canonical environment contract. Copy
 it to the untracked `.env` file and never commit that file. Its checked-in sale
@@ -256,6 +263,7 @@ Run the canonical gate from the repository root:
 pnpm install --frozen-lockfile
 pnpm format:check
 pnpm exec turbo run lint typecheck test build test:integration --force
+pnpm --filter @flash/web exec playwright install chromium
 pnpm --filter @flash/web test:e2e
 pnpm audit --audit-level high
 docker compose -f infra/docker-compose.yml config -q
@@ -263,6 +271,7 @@ PHASE5_K6_UID="$(id -u)" PHASE5_K6_GID="$(id -g)" \
   RAW_RESULT_DIR=/tmp/phase5-contract-results \
   docker compose -p flash-load-contract -f load/docker-compose.yml config -q
 sha256sum -c load/results/phase-5-results.sha256
+sha256sum -c load/results/post-delivery-stress-2026-07-23.sha256
 ```
 
 Gate evidence requires `Cached: 0 cached`; fixed test totals are intentionally not
@@ -281,7 +290,7 @@ The test layers cover:
   visual comparisons;
 - k6 runner, scenario, audit-publication, cleanup, and fail-closed harness tests.
 
-## Stress guide and qualified Phase 5 result
+## Stress guide and evidence
 
 No global k6 installation is needed; the harness pins
 `grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f`.
@@ -372,9 +381,10 @@ Accepted risks and required production work:
   scheduled poll. It is bounded and does not affect purchases, but can delay a
   manual refresh.
 - GitHub Actions currently cannot execute because of account billing.
-- The post-delivery full run is non-qualifying: its duplicate-storm correctness
-  audit passed, but latency and dropped-iteration acceptance criteria failed. Its
-  reverted T2 configuration cannot establish final-code capacity or latency.
+- The post-delivery partial full-profile diagnostic run is non-qualifying: its
+  duplicate-storm correctness audit passed, but latency and dropped-iteration
+  acceptance criteria failed. Its reverted T2 configuration cannot establish
+  final-code capacity or latency.
 
 Authentication, payments, multiple sales/products, a cloud rollout, and deployed
 horizontal scaling remain out of scope.
