@@ -4,14 +4,16 @@
 # Build context is the repo ROOT (see infra/docker-compose.yml: build.context = "..")
 # so the pnpm workspace (root manifests + all workspace package.json files) is visible.
 
-# node:22.11-alpine's Node.js (v22.11.0) is below pnpm@11.9.0's minimum supported Node
-# (>=22.13), and separately its bundled corepack has npm-registry signing keys that go
-# stale over time ("Cannot find matching keyid") independent of network/registry
-# reachability. 22.14-alpine clears the engine floor; installing pnpm directly via npm
-# (below) sidesteps corepack's signature-verification path entirely, which is more robust
-# for a cold build months from now than re-upgrading corepack in place.
-FROM node:22.14-alpine AS base
-RUN npm install -g pnpm@11.9.0
+# Pin the reviewed Node OCI index and checksum-verify the pnpm bootstrap archive.
+FROM node:22.14-alpine@sha256:9bef0ef1e268f60627da9ba7d7605e8831d5b56ad07487d24d1aa386336d1944 AS base
+ADD --checksum=sha256:2b567aa66026238078ac2e0a33bec3febd60e962987aac697456f3180819b287 https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz /tmp/pnpm.tgz
+RUN set -eux; \
+  test ! -e /usr/local/bin/pnpm; \
+  mkdir -p /opt/pnpm; \
+  tar -xzf /tmp/pnpm.tgz -C /opt/pnpm --strip-components=1; \
+  ln -s /opt/pnpm/bin/pnpm.mjs /usr/local/bin/pnpm; \
+  test "$(pnpm --version)" = "11.9.0"; \
+  rm /tmp/pnpm.tgz
 WORKDIR /app
 
 # ---- deps: resolve the whole workspace graph; cached while manifests are unchanged ----
@@ -33,7 +35,7 @@ COPY . .
 RUN pnpm --filter @flash/web... build
 
 # ---- runtime: static assets served by nginx, SPA fallback ----
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS runtime
 COPY infra/web.nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 80
