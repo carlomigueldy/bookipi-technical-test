@@ -1,6 +1,6 @@
 services:
   redis:
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec']
     ports:
       - '127.0.0.1:${STRESS_REDIS_PORT:-6680}:6379'
@@ -18,7 +18,7 @@ services:
           memory: 256M
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_USER: flash
       POSTGRES_PASSWORD: flash
@@ -91,7 +91,7 @@ services:
           memory: 768M
 
   k6:
-    image: grafana/k6:1.7.1
+    image: grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f
     profiles: ['k6']
     user: '${PHASE5_K6_UID:?PHASE5_K6_UID is required}:${PHASE5_K6_GID:?PHASE5_K6_GID is required}'
     read_only: true
