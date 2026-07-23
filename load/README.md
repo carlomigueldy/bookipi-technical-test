@@ -9,9 +9,11 @@ pnpm stress:smoke # one 30-second 200 purchase/s run
 pnpm stress       # warmup plus 3x surge, duplicate storm, sold-out, and window-edge
 ```
 
-Docker and Compose are required; k6 is the pinned `grafana/k6:1.7.1` container. Raw evidence is
-written under `load/results/raw/<runId>/` and ignored by Git. The reviewed table and integrity
-manifest are `load/results/phase-5-results.md` and `phase-5-results.sha256`.
+Docker and Compose are required; no global k6 installation is needed. The runner uses the pinned
+`grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f`
+container. Raw evidence is written under `load/results/raw/<runId>/` and ignored by Git. The
+reviewed table and integrity manifest are `load/results/phase-5-results.md` and
+`phase-5-results.sha256`.
 
 Local execution requires a non-root POSIX UID/GID. The runner maps that numeric identity only to
 the k6 container, keeps its root filesystem and scripts read-only, and proves the run-scoped result
@@ -26,3 +28,6 @@ a root-owned, non-group/world-writable /usr/bin/ln; this host reports uid 65534.
 authorized skipping privileged host remediation. No Phase 5 rps, p95/p99, threshold, or live
 post-stress I1–I4 claim is made. On a compliant Linux host, run pnpm stress to produce those
 measurements; do not bypass the helper validation.
+
+The real stock-10 peak workload did not complete in this constrained environment and is not
+represented as a passing stress result.

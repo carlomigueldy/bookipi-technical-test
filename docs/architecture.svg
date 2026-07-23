@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="&#104;ttp://www.w3.org/2000/svg"
+  viewBox="0 0 1440 820"
+  role="img"
+  aria-labelledby="title description"
+>
+  <title id="title">Bookipi flash-sale system architecture</title>
+  <desc id="description">
+    React calls a NestJS Fastify API. Redis is authoritative for atomic purchase decisions. BullMQ
+    carries confirmed orders to a Nest worker, which writes durable orders to Postgres and performs
+    reconciliation or identity-safe compensation.
+  </desc>
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+    .canvas {
+      fill: #f8fafc;
+    }
+    .panel {
+      fill: #ffffff;
+      stroke: #334155;
+      stroke-width: 2;
+    }
+    .authority {
+      fill: #ecfeff;
+      stroke: #0e7490;
+      stroke-width: 3;
+    }
+    .durable {
+      fill: #eef2ff;
+      stroke: #4338ca;
+      stroke-width: 3;
+    }
+    .title {
+      fill: #0f172a;
+      font:
+        700 24px system-ui,
+        sans-serif;
+    }
+    .label {
+      fill: #0f172a;
+      font:
+        700 18px system-ui,
+        sans-serif;
+    }
+    .detail {
+      fill: #334155;
+      font:
+        500 14px system-ui,
+        sans-serif;
+    }
+    .edge-label {
+      fill: #1e293b;
+      font:
+        600 13px system-ui,
+        sans-serif;
+    }
+    .sync {
+      fill: none;
+      stroke: #0e7490;
+      stroke-width: 3;
+      marker-end: url(#arrow-sync);
+    }
+    .async {
+      fill: none;
+      stroke: #7c3aed;
+      stroke-width: 3;
+      marker-end: url(#arrow-async);
+    }
+    .repair {
+      fill: none;
+      stroke: #b45309;
+      stroke-width: 3;
+      stroke-dasharray: 9 7;
+      marker-end: url(#arrow-repair);
+    }
+    .read {
+      fill: none;
+      stroke: #475569;
+      stroke-width: 2.5;
+      stroke-dasharray: 4 6;
+      marker-end: url(#arrow-read);
+    }
+    .legend-text {
+      fill: #334155;
+      font:
+        500 13px system-ui,
+        sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      .canvas {
+        fill: #0f172a;
+      }
+      .panel {
+        fill: #1e293b;
+        stroke: #94a3b8;
+      }
+      .authority {
+        fill: #164e63;
+        stroke: #67e8f9;
+      }
+      .durable {
+        fill: #312e81;
+        stroke: #a5b4fc;
+      }
+      .title,
+      .label {
+        fill: #f8fafc;
+      }
+      .detail,
+      .edge-label,
+      .legend-text {
+        fill: #e2e8f0;
+      }
+    }
+  </style>
+  <defs>
+    <marker
+      id="arrow-sync"
+      markerWidth="10"
+      markerHeight="10"
+      refX="9"
+      refY="3"
+      orient="auto"
+      markerUnits="strokeWidth"
+    >
+      <path d="M0,0 L0,6 L9,3 z" fill="#0e7490" />
+    </marker>
+    <marker
+      id="arrow-async"
+      markerWidth="10"
+      markerHeight="10"
+      refX="9"
+      refY="3"
+      orient="auto"
+      markerUnits="strokeWidth"
+    >
+      <path d="M0,0 L0,6 L9,3 z" fill="#7c3aed" />
+    </marker>
+    <marker
+      id="arrow-repair"
+      markerWidth="10"
+      markerHeight="10"
+      refX="9"
+      refY="3"
+      orient="auto"
+      markerUnits="strokeWidth"
+    >
+      <path d="M0,0 L0,6 L9,3 z" fill="#b45309" />
+    </marker>
+    <marker
+      id="arrow-read"
+      markerWidth="10"
+      markerHeight="10"
+      refX="9"
+      refY="3"
+      orient="auto"
+      markerUnits="strokeWidth"
+    >
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+  </defs>
+
+  <rect class="canvas" width="1440" height="820" rx="24" />
+  <text class="title" x="48" y="52">Flash-sale decision and durability paths</text>
+
+  <rect class="panel" x="48" y="125" width="210" height="120" rx="18" />
+  <text class="label" x="153" y="170" text-anchor="middle">React SPA</text>
+  <text class="detail" x="153" y="201" text-anchor="middle">Vite</text>
+
+  <rect class="panel" x="338" y="125" width="230" height="120" rx="18" />
+  <text class="label" x="453" y="170" text-anchor="middle">NestJS API</text>
+  <text class="detail" x="453" y="201" text-anchor="middle">Fastify</text>
+
+  <rect class="authority" x="648" y="100" width="300" height="170" rx="28" />
+  <text class="label" x="798" y="145" text-anchor="middle">Redis 7 — authoritative</text>
+  <text class="detail" x="798" y="177" text-anchor="middle">stock · buyers · reservations</text>
+  <text class="detail" x="798" y="211" text-anchor="middle">
+    Atomic purchase seam: I1 · I2 · I3
+  </text>
+  <text class="detail" x="798" y="238" text-anchor="middle">Redis TIME · half-open window</text>
+
+  <rect class="panel" x="648" y="405" width="300" height="125" rx="18" />
+  <text class="label" x="798" y="450" text-anchor="middle">BullMQ orders</text>
+  <text class="detail" x="798" y="482" text-anchor="middle">deterministic persist-order job</text>
+
+  <rect class="panel" x="1040" y="405" width="305" height="150" rx="18" />
+  <text class="label" x="1192" y="450" text-anchor="middle">Nest worker</text>
+  <text class="detail" x="1192" y="482" text-anchor="middle">retry · reconciliation</text>
+  <text class="detail" x="1192" y="513" text-anchor="middle">
+    identity-safe terminal resolution
+  </text>
+
+  <rect class="durable" x="1040" y="100" width="305" height="170" rx="28" />
+  <text class="label" x="1192" y="145" text-anchor="middle">Postgres 16 — durable</text>
+  <text class="detail" x="1192" y="177" text-anchor="middle">orders</text>
+  <text class="detail" x="1192" y="211" text-anchor="middle">
+    unique user + reservation identity
+  </text>
+  <text class="detail" x="1192" y="238" text-anchor="middle">Durable seam: I2 · I4</text>
+
+  <path class="sync" d="M258 185 H338" />
+  <text class="edge-label" x="298" y="104" text-anchor="middle">REST + jittered polling</text>
+
+  <path class="sync" d="M568 185 H648" />
+  <text class="edge-label" x="608" y="78" text-anchor="middle">EVALSHA: atomic purchase</text>
+
+  <path class="async" d="M500 245 C520 390 590 468 648 468" />
+  <text class="edge-label" x="485" y="335">persist-order</text>
+  <text class="edge-label" x="500" y="358">deterministic job id</text>
+
+  <path class="async" d="M948 468 H1040" />
+  <text class="edge-label" x="994" y="446" text-anchor="middle">async delivery</text>
+
+  <path class="async" d="M1192 405 V270" />
+  <text class="edge-label" x="1206" y="331">idempotent insert</text>
+  <text class="edge-label" x="1206" y="352">advisory-lock adjudication</text>
+
+  <path class="read" d="M568 145 C740 48 920 48 1040 145" />
+  <text class="edge-label" x="800" y="72" text-anchor="middle">purchase status</text>
+
+  <path class="repair" d="M1040 515 C1000 600 866 600 825 530" />
+  <text class="edge-label" x="934" y="630" text-anchor="middle">
+    boot + continuous reconciliation
+  </text>
+
+  <path class="repair" d="M1100 555 C1030 730 820 730 798 270" />
+  <text class="edge-label" x="932" y="732" text-anchor="middle">
+    ledger repair · identity-safe compensation
+  </text>
+
+  <g transform="translate(48 690)">
+    <line class="sync" x1="0" y1="0" x2="55" y2="0" />
+    <text class="legend-text" x="72" y="5">synchronous purchase flow</text>
+    <line class="async" x1="280" y1="0" x2="335" y2="0" />
+    <text class="legend-text" x="352" y="5">asynchronous durability flow</text>
+    <line class="read" x1="590" y1="0" x2="645" y2="0" />
+    <text class="legend-text" x="662" y="5">read path</text>
+    <line class="repair" x1="790" y1="0" x2="845" y2="0" />
+    <text class="legend-text" x="862" y="5">reconciliation / compensation</text>
+  </g>
+</svg>
