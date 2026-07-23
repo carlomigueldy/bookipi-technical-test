@@ -26,8 +26,7 @@ coverage/
 **/coverage/
 
 # environment files — never bake secrets into an image layer
-.env
-.env.*.local
+.env*
 !.env.example
 
 # VCS / editor / OS

@@ -14,8 +14,7 @@ build/
 coverage/
 
 # environment files (never commit real env values)
-.env
-.env.*.local
+.env*
 !.env.example
 
 # k6 load-test result artifacts

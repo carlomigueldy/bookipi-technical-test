@@ -1683,3 +1683,397 @@ stress workload runs.
 > Preserve every other byte and all concurrent docs/contract work. Run §16.4 and
 > return actual output. Do not build/run Docker, edit dependencies/application/
 > web/Compose/docs/STATE/contracts, perform Git actions, or touch `.codex`.
+
+## 17. AMENDMENT A3 — Security review remediation
+
+**Status:** normative, additive, and frozen on handoff.
+
+Security review rejected candidate `080f9b7` because ordinary local Compose
+published unauthenticated datastores on every host interface, environment-file
+ignore rules did not cover all conventional names, and container/bootstrap inputs
+remained mutable. Candidate `080f9b7` must not be tagged or used to close Phase 6.
+This amendment supersedes earlier Phase 6 clauses only where they conflict with
+the requirements below. All other requirements, including A1 and A2, remain
+binding.
+
+### 17.1 Frozen supply-chain inputs
+
+The following are the only permitted base/service image references in A3-owned
+paths:
+
+| Image | Exact reference |
+| --- | --- |
+| Node | `node:22.14-alpine@sha256:9bef0ef1e268f60627da9ba7d7605e8831d5b56ad07487d24d1aa386336d1944` |
+| nginx | `nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10` |
+| Redis | `redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99` |
+| Postgres | `postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777` |
+| k6 | `grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f` |
+
+These digests were resolved on 2026-07-23 from Docker Hub Registry v2
+`Docker-Content-Digest` responses and identify multi-platform OCI image indexes.
+The `tag@digest` spelling preserves the reviewed human-readable version while the
+digest is authoritative and allows platform selection from the pinned index. A
+future update requires another reviewed, versioned contract amendment; a moving
+tag is not an update mechanism.
+
+The pnpm bootstrap is frozen to:
+
+```text
+version: 11.9.0
+URL: https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz
+SHA-256: 2b567aa66026238078ac2e0a33bec3febd60e962987aac697456f3180819b287
+npm integrity: sha512-vWgtXQP+Ul73yf1ngMaITR51asTJyf4AxTh4KCQxDc+Q493E9Tg18G3669UIXkGFXgvLs7YN4qxburieUDbwOw==
+```
+
+Every A3-owned Dockerfile must retain `# syntax=docker/dockerfile:1.7` and replace
+`npm install -g pnpm@11.9.0` with this exact semantic sequence:
+
+```dockerfile
+ADD --checksum=sha256:2b567aa66026238078ac2e0a33bec3febd60e962987aac697456f3180819b287 https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz /tmp/pnpm.tgz
+RUN set -eux; \
+  test ! -e /usr/local/bin/pnpm; \
+  mkdir -p /opt/pnpm; \
+  tar -xzf /tmp/pnpm.tgz -C /opt/pnpm --strip-components=1; \
+  ln -s /opt/pnpm/bin/pnpm.mjs /usr/local/bin/pnpm; \
+  test "$(pnpm --version)" = "11.9.0"; \
+  rm /tmp/pnpm.tgz
+```
+
+This is an integrity-fixed, version-checked bootstrap. No global package-manager
+installation or network-fetched executable without an in-file checksum is allowed.
+
+### 17.2 A3-E — Environment-file containment
+
+**Role:** `implementer` (general-purpose / Sonnet-mapped).
+
+**Skills, in order:** `multi-stage-dockerfile`, `turborepo-monorepo`.
+
+**Exclusive owned paths:**
+
+```text
+.gitignore
+.dockerignore
+```
+
+Replace the environment ignore block in both files with exactly:
+
+```gitignore
+.env*
+!.env.example
+```
+
+Do not otherwise reorder or change either file. This protects `.env.production`,
+`.env.staging`, and all other environment-file suffixes while preserving the only
+tracked template.
+
+Focused evidence:
+
+```bash
+for path in .env .env.local .env.production .env.staging.local; do
+  git check-ignore --no-index -q "$path"
+done
+test -z "$(git check-ignore --no-index .env.example || true)"
+test "$(rg -F -x '.env*' .gitignore .dockerignore | wc -l)" -eq 2
+test "$(rg -n '^!\.env\.example$' .gitignore .dockerignore | wc -l)" -eq 2
+git diff --check -- .gitignore .dockerignore
+git diff --name-only -- .gitignore .dockerignore |
+  diff -u <(printf '%s\n' .dockerignore .gitignore) -
+```
+
+Fresh-clone §8.3 is extended: create an untracked `.env.production` containing a
+unique sentinel before any image build. In the existing exact API `build`-stage
+inspection image, require `/app/.env.production` absent and search Docker history
+for the unique value. In each API, worker, and web final image, require the file and
+unique value absent at the appropriate application root. Remove that exact file
+with the other sentinels before Compose startup and require
+`test ! -e .env.production`. The one existing inspection tag and cleanup authority
+remain unchanged. This proof is additive to, not a replacement for, the existing
+secret/build-context exclusions.
+
+### 17.3 A3-B — Digest-pinned build images and pnpm bootstrap
+
+**Role:** `implementer` (general-purpose / Sonnet-mapped).
+
+**Skills, in order:** `multi-stage-dockerfile`, `turborepo-monorepo`.
+
+**Exclusive owned paths:**
+
+```text
+infra/api.Dockerfile
+infra/worker.Dockerfile
+infra/web.Dockerfile
+```
+
+Pin every Node `FROM` in all three Dockerfiles to the Node reference in §17.1 and
+the web runtime `FROM` to the nginx reference. Apply the exact pnpm bootstrap from
+§17.1 once in each Dockerfile's shared base stage. Preserve stage names, build
+arguments, non-root runtime users, health checks, workspaces, lockfile semantics,
+and A2's exact API/worker final-image whitelist. Replace the now-stale Corepack/npm
+bootstrap comments with concise, factual checksum-bootstrap comments; leaving a
+comment that claims `npm install -g` is used is a failed documentation gate.
+
+Focused evidence:
+
+```bash
+test "$(rg -F 'node:22.14-alpine@sha256:9bef0ef1e268f60627da9ba7d7605e8831d5b56ad07487d24d1aa386336d1944' infra/*.Dockerfile | wc -l)" -eq 5
+test "$(rg -F 'nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10' infra/web.Dockerfile | wc -l)" -eq 1
+test "$(rg -F 'ADD --checksum=sha256:2b567aa66026238078ac2e0a33bec3febd60e962987aac697456f3180819b287 https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz /tmp/pnpm.tgz' infra/*.Dockerfile | wc -l)" -eq 3
+test "$(rg -F 'test \"$(pnpm --version)\" = \"11.9.0\"' infra/*.Dockerfile | wc -l)" -eq 3
+test -z "$(rg -n 'npm install -g|^FROM (node|nginx):[^ ]+$' infra/*.Dockerfile || true)"
+git diff --check -- infra/api.Dockerfile infra/worker.Dockerfile infra/web.Dockerfile
+```
+
+The exact cold, no-cache builds in §8 must succeed. Successful execution of each
+Dockerfile's version assertion is required evidence; a cached base-stage result
+alone is insufficient for the replacement candidate.
+
+### 17.4 A3-C — Loopback datastore publication and service image pins
+
+**Role:** `implementer` (general-purpose / Sonnet-mapped).
+
+**Skills, in order:** `multi-stage-dockerfile`, `k6`,
+`turborepo-monorepo`.
+
+**Exclusive owned paths:**
+
+```text
+infra/docker-compose.yml
+load/docker-compose.yml
+.github/workflows/ci.yml
+```
+
+In ordinary local Compose, the only permitted Redis and Postgres host mappings are:
+
+```yaml
+redis:
+  ports:
+    - "127.0.0.1:6380:6379"
+postgres:
+  ports:
+    - "127.0.0.1:5433:5432"
+```
+
+Retain every existing loopback mapping in `load/docker-compose.yml`. Replace every
+Redis and Postgres image occurrence in both Compose files and CI services with the
+exact §17.1 references. Replace the k6 service image in load Compose with the exact
+§17.1 k6 reference. Do not alter credentials, commands, health checks, service
+names, networks, volumes, workflow triggers, job topology, or application code.
+
+Rendered Compose proof is semantic, not source-text-only:
+
+```bash
+docker compose -f infra/docker-compose.yml config --format json |
+  node -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  const services = JSON.parse(input).services;
+  const expected = { redis: ["127.0.0.1", "6380", 6379], postgres: ["127.0.0.1", "5433", 5432] };
+  for (const [name, want] of Object.entries(expected)) {
+    const ports = services[name].ports;
+    if (!Array.isArray(ports) || ports.length !== 1) throw new Error(name + " port count");
+    const got = ports[0];
+    if (got.host_ip !== want[0] || String(got.published) !== want[1] ||
+        Number(got.target) !== want[2]) throw new Error(name + " port mapping");
+  }
+});'
+
+docker compose -f load/docker-compose.yml config --format json |
+  node -e '
+let input = "";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  const services = JSON.parse(input).services;
+  for (const [name, service] of Object.entries(services)) {
+    for (const port of service.ports || []) {
+      if (port.host_ip !== "127.0.0.1") throw new Error(name + " non-loopback port");
+    }
+  }
+});'
+```
+
+Also require:
+
+```bash
+test -z "$(rg -n 'image:\s*(redis:7\.4-alpine|postgres:16-alpine|grafana/k6:1\.7\.1)\s*$' infra/docker-compose.yml load/docker-compose.yml .github/workflows/ci.yml || true)"
+test "$(rg -F 'redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99' infra/docker-compose.yml load/docker-compose.yml .github/workflows/ci.yml | wc -l)" -eq 5
+test "$(rg -F 'postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777' infra/docker-compose.yml load/docker-compose.yml .github/workflows/ci.yml | wc -l)" -eq 4
+test "$(rg -F 'grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f' load/docker-compose.yml | wc -l)" -eq 1
+git diff --check -- infra/docker-compose.yml load/docker-compose.yml .github/workflows/ci.yml
+```
+
+If the current file inventory produces a different count, stop and escalate to the
+architect. Do not omit or duplicate an image reference to satisfy a count.
+
+### 17.5 A3-D — Security and supply-chain documentation
+
+**Role:** `implementer` (general-purpose / Sonnet-mapped).
+
+**Skills, in order:** `redis-connections`, `postgresql-table-design`, `k6`,
+`multi-stage-dockerfile`.
+
+**Exclusive owned paths:**
+
+```text
+README.md
+load/README.md
+```
+
+The root README must:
+
+1. state that ordinary Compose's Redis/Postgres host ports are loopback-bound for
+   local development only;
+2. state that a production deployment must publish neither datastore to the host
+   or public network, must place them on a private network, and must use
+   non-default Postgres database/user/password values supplied by its secret
+   manager;
+3. require Redis ACL username/password authentication and encrypted transport
+   (`TLS`/`rediss://`) in production, with credentials supplied by its secret
+   manager;
+4. explicitly say the local `flash` credentials and unauthenticated local Redis
+   are development conveniences, not a production-safe configuration;
+5. identify the exact reviewed, multi-platform OCI index digests in §17.1 and
+   explain that future digest changes require review; and
+6. describe the checksum-verified pnpm 11.9.0 bootstrap without claiming that npm
+   registry availability is eliminated during a cold build.
+
+`load/README.md` must replace any tag-only k6 pin claim with the exact §17.1
+tag-plus-digest reference and preserve the existing offline/rerun guidance.
+
+Both documents must preserve Phase 5's historical limitation exactly: the real
+stock-10 peak workload did not complete in the constrained environment and is not
+represented as a passing stress result. Preserve the architecture, I1–I4, endpoint,
+queue, audit, recovery, and local-run truth. No production authentication behavior
+may be claimed as implemented in the local Compose topology.
+
+Because README bytes change, rerun all S2 §6 evidence using A1's literal-brace and
+Prettier substitutions. Additionally run:
+
+```bash
+pnpm exec prettier --check README.md load/README.md
+git diff --check -- README.md load/README.md
+test -z "$(rg -n 'grafana/k6:1\.7\.1(?!@sha256:)' load/README.md --pcre2 || true)"
+```
+
+### 17.6 Exclusive ownership and handoff order
+
+The four slices in §§17.2–17.5 are pairwise path-exclusive. No A3 implementer may
+edit the contract, application source, another slice's path, `STATE.md`, Git
+metadata, or `.codex/`. Concurrent user work is preserved. Any need outside an
+owned path stops the slice and routes back through the architect.
+
+Root records this amendment with A3-E, then sequences these additive corrective
+commits without amending, rebasing, or reusing rejected candidate `080f9b7`:
+
+```text
+fix(security): exclude all environment variants
+fix(infra): pin build images and pnpm bootstrap
+fix(infra): bind datastores and pin service images
+docs(security): document production datastore hardening
+```
+
+The resulting HEAD after all four commits is the only replacement candidate.
+Contract staging, commits, tags, `STATE.md`, branch/PR actions, and final gate
+bookkeeping remain root-only.
+
+### 17.7 Replacement-candidate verification
+
+Each slice must first return its actual focused command output. Root then runs, on
+the immutable replacement candidate:
+
+1. all README/diagram checks in §6 because documentation changed;
+2. the complete root gate in §7;
+3. all of fresh-clone §8 from initial preflight through A2's exact
+   anonymous-volume cleanup;
+4. A3's `.env.production` build-context sentinel, rendered `HostIp`, digest-source
+   checks, and uncached pnpm bootstrap assertions;
+5. §9 security review with the A3 scope named explicitly; and
+6. §10 final architecture review.
+
+The full fresh-clone build must resolve and use the frozen digest for every base
+and started service image. For Redis and Postgres, inspect the locally resolved
+image's `RepoDigests` and require the corresponding §17.1 digest. Static source
+checks plus a fresh remote manifest/index inspection prove the k6 pin without
+pulling or running the stress profile. Static source checks plus successful
+uncached Docker builds prove the Dockerfile bases: a build failure, platform
+mismatch, unavailable digest, or skipped pnpm version assertion is RED. Retain all
+existing health, persistence, duplicate, stock, history, final-image whitelist,
+secret sentinel, and cleanup assertions.
+
+Use these exact read-only provenance checks after the production stack has
+resolved its service images:
+
+```bash
+docker image inspect \
+  "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99" \
+  --format '{{json .RepoDigests}}' |
+  rg -F 'sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99'
+docker image inspect \
+  "postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777" \
+  --format '{{json .RepoDigests}}' |
+  rg -F 'sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'
+K6_INDEX="$(
+  docker buildx imagetools inspect \
+    'grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f'
+)"
+printf '%s\n' "$K6_INDEX" |
+  rg -F 'MediaType: application/vnd.oci.image.index.v1+json'
+printf '%s\n' "$K6_INDEX" |
+  rg -F 'Digest:    sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f'
+```
+
+Whitespace around the displayed `Digest:` value may vary by Buildx version; if
+the final fixed-string check fails only for spacing, parse the value after
+`Digest:` and require exact equality to the frozen digest. A different digest or
+media type is RED.
+
+No live stress workload runs. Phase 5's limitation and results remain historical
+and unchanged. A review claim, cached-only result, or partial rerun cannot gate the
+replacement candidate.
+
+The §9 security-review approval must now explicitly confirm:
+
+```text
+APPROVE — Phase 6 ship surface preserves I1–I4; ordinary datastore ports are
+loopback-only; all environment variants except .env.example are excluded from Git
+and Docker contexts; runtime, service, and k6 images are pinned to reviewed
+multi-platform OCI index digests; the pnpm bootstrap is checksum-fixed and
+version-checked; and production datastore isolation, Postgres secret credentials,
+and Redis ACL/TLS requirements are disclosed without claiming local enforcement.
+```
+
+Any qualification, omitted clause, unresolved high/medium finding, or approval of
+an earlier SHA is RED. Section §11 begins only after both §9 and §10 approve the
+same immutable replacement candidate.
+
+### 17.8 Invariant and scope effect
+
+- **I1 — No oversell:** Redis Lua semantics, stock keys, and atomic decision paths
+  are unchanged; the full concurrency and functional suites remain mandatory.
+- **I2 — One per user:** Redis buyer-set and Postgres unique-index enforcement are
+  unchanged; duplicate and durable-order assertions remain mandatory.
+- **I3 — Window enforcement:** API half-open interval checks and clock behavior are
+  unchanged; boundary integration tests remain mandatory.
+- **I4 — No lost confirmations:** BullMQ retry/DLQ compensation, Postgres
+  idempotency, reconciliation, and Redis durability settings are unchanged; the
+  failure-mode suite and final persistence/stock/history assertions remain
+  mandatory.
+- **Security:** A3 reduces local network exposure and supply-chain mutability and
+  prevents conventional environment secrets from entering Git or Docker build
+  contexts. Production datastore authentication is a documented deployment
+  requirement, deliberately not retrofitted into the local-development topology.
+- **Phase 5/docs truth:** the historical constrained-run limitation is preserved;
+  no new performance claim or workload execution is authorized.
+- **Protected state:** no A3 role touches `.codex/`; the existing untracked
+  directory remains outside all diffs and commits.
+
+### 17.9 A3 ADR notes
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| Bind ordinary local Redis/Postgres publication to loopback | keep all-interface publication because credentials are “development only” | Local convenience does not justify exposing unauthenticated or default-credential datastores to the LAN. |
+| Require private, unpublished, authenticated production datastores in documentation | retrofit ACL/password behavior into the frozen local topology during ship | The finding requires an actionable production boundary; changing connection behavior now would expand application/env/test interfaces beyond Phase 6 documentation and infra remediation. |
+| Ignore `.env*` with only `.env.example` re-included | enumerate currently known suffixes | Environment suffixes are open-ended; deny-by-pattern prevents a new conventional name from silently entering Git or a Docker context. |
+| Pin versioned tags to reviewed OCI index digests | tag-only pins or architecture-specific manifest digests | Tag-only inputs move; OCI index digests freeze content while retaining supported platform selection. |
+| Fetch the self-contained pnpm tarball with Dockerfile checksum verification and assert its version | `npm install -g`, Corepack network/signature state, or vendoring generated package contents | The build consumes exact reviewed bytes, fails closed on mismatch, and avoids an additional mutable installer resolution without adding a generated binary artifact to Git. |
+| Verify k6's remote index without pulling or executing it in Phase 6 | run the load profile or leave an untracked pulled image | Supply-chain proof does not authorize a new performance run, and the frozen Phase 5 evidence boundary must remain intact. |
