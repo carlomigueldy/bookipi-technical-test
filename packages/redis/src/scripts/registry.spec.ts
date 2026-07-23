@@ -9,7 +9,11 @@ import type { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { connect } from '../../test/harness';
-import { COMPARE_RESTORE_RESERVATION_SCRIPT, LUA_SCRIPTS } from './registry';
+import {
+  COMPARE_RESTORE_RESERVATION_SCRIPT,
+  INSPECT_RESERVATION_MEMBERSHIP_SCRIPT,
+  LUA_SCRIPTS,
+} from './registry';
 
 describe('script registry', () => {
   let client: Redis;
@@ -53,5 +57,15 @@ describe('script registry', () => {
     expect(COMPARE_RESTORE_RESERVATION_SCRIPT.name).toBe('compare-restore-reservation');
     expect(COMPARE_RESTORE_RESERVATION_SCRIPT.numKeys).toBe(2);
     expect(LUA_SCRIPTS).toContain(COMPARE_RESTORE_RESERVATION_SCRIPT);
+  });
+
+  it('A4 — registry pins inspect-reservation-membership name, sha1, key count, and membership', async () => {
+    expect(INSPECT_RESERVATION_MEMBERSHIP_SCRIPT.name).toBe('inspect-reservation-membership');
+    expect(INSPECT_RESERVATION_MEMBERSHIP_SCRIPT.numKeys).toBe(2);
+    expect(INSPECT_RESERVATION_MEMBERSHIP_SCRIPT.sha1).toMatch(/^[0-9a-f]{40}$/);
+    expect(await client.script('LOAD', INSPECT_RESERVATION_MEMBERSHIP_SCRIPT.src)).toBe(
+      INSPECT_RESERVATION_MEMBERSHIP_SCRIPT.sha1,
+    );
+    expect(LUA_SCRIPTS).toContain(INSPECT_RESERVATION_MEMBERSHIP_SCRIPT);
   });
 });

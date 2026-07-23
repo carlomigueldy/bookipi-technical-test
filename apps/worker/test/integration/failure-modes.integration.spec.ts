@@ -12,7 +12,7 @@ import {
 import { Worker, type Job } from 'bullmq';
 import Redis from 'ioredis';
 import { Pool } from 'pg';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HealthController } from '../../src/health/health.controller.js';
 import { WORKER_SHUTDOWN_WATCHDOG_MS } from '../../src/main.js';
@@ -1441,4 +1441,239 @@ describe('Phase 3 real-container durability failures', () => {
       await stopIfRunning(production.child);
     }
   }, 10_000);
+
+  it('A4 — purchases committed between reservation HSCAN and buyer SSCAN remain healthy and durable', async () => {
+    const latePurchaseCount = 32;
+    const h = await harness({
+      SALE_TOTAL_STOCK: 64,
+      WORKER_RECONCILE_INTERVAL_MS: 60_000,
+      WORKER_DLQ_SWEEP_INTERVAL_MS: 60_000,
+    });
+    await h.seed();
+    await h.reconciliation.start();
+
+    const readinessStatuses: number[] = [];
+    const observeReadiness = () => {
+      let status = 0;
+      const result = new HealthController(h.health).getReady({
+        status(code) {
+          status = code;
+        },
+      });
+      readinessStatuses.push(status);
+      expect(result.status).toBe('ok');
+      expect(result.checks.reconciliationHealthy).toBe(true);
+    };
+    observeReadiness();
+
+    const originalScanReservations = h.store.scanReservations.bind(h.store);
+    let barrierEntered!: () => void;
+    let releaseBarrier!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      barrierEntered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    let barrierUsed = false;
+    const scanSpy = vi
+      .spyOn(h.store, 'scanReservations')
+      .mockImplementation(async (...args: Parameters<typeof h.store.scanReservations>) => {
+        const page = await originalScanReservations(...args);
+        if (!barrierUsed && page.cursor === '0') {
+          barrierUsed = true;
+          barrierEntered();
+          await released;
+        }
+        return page;
+      });
+
+    const originalInspection = h.store.inspectReservationMembership.bind(h.store);
+    const passInspections: Array<{
+      userId: string;
+      outcome: string;
+      reservationId: string | null;
+    }> = [];
+    let recordPassInspections = false;
+    const inspectionSpy = vi
+      .spyOn(h.store, 'inspectReservationMembership')
+      .mockImplementation(
+        async (...args: Parameters<typeof h.store.inspectReservationMembership>) => {
+          const inspection = await originalInspection(...args);
+          if (recordPassInspections) {
+            passInspections.push({
+              userId: args[1],
+              outcome: inspection.outcome,
+              reservationId: inspection.reservation?.reservationId ?? null,
+            });
+          }
+          return inspection;
+        },
+      );
+
+    let pass: Promise<void> | null = null;
+    const late = [] as Array<{
+      userId: string;
+      reservationId: string;
+      reservedAtMs: number;
+    }>;
+    try {
+      pass = h.reconciliation.triggerPass();
+      void pass.catch(() => undefined);
+      await Promise.race([
+        entered,
+        pass.then(() => {
+          throw new Error('reconciliation completed before the reservation-scan barrier');
+        }),
+      ]);
+      observeReadiness();
+
+      const purchases = await Promise.all(
+        Array.from({ length: latePurchaseCount }, (_, index) => {
+          const userId = `usr-a4-late-${String(index).padStart(2, '0')}`;
+          return h.store.purchase(h.env.SALE_ID, userId).then((result) => ({ userId, result }));
+        }),
+      );
+      for (const { userId, result } of purchases) {
+        expect(result.outcome).toBe('CONFIRMED');
+        expect(result.reservationId).not.toBeNull();
+        late.push({
+          userId,
+          reservationId: result.reservationId!,
+          reservedAtMs: result.serverTimeMs,
+        });
+      }
+      expect(late).toHaveLength(latePurchaseCount);
+
+      const directInspections = await Promise.all(
+        late.map(({ userId }) => originalInspection(h.env.SALE_ID, userId)),
+      );
+      for (const [index, inspection] of directInspections.entries()) {
+        expect(inspection).toMatchObject({
+          outcome: 'BOTH',
+          reservation: {
+            userId: late[index]!.userId,
+            reservationId: late[index]!.reservationId,
+          },
+        });
+      }
+      observeReadiness();
+
+      recordPassInspections = true;
+      releaseBarrier();
+      while (h.state.lastReconciledAt === null) {
+        observeReadiness();
+        await yieldTurn();
+      }
+      await pass;
+      observeReadiness();
+    } finally {
+      releaseBarrier();
+      if (pass) await Promise.allSettled([pass]);
+      scanSpy.mockRestore();
+      inspectionSpy.mockRestore();
+    }
+
+    expect(barrierUsed).toBe(true);
+    expect(readinessStatuses.length).toBeGreaterThanOrEqual(4);
+    expect(readinessStatuses.every((status) => status === 200)).toBe(true);
+    expect(h.state.reconciliationHealthy).toBe(true);
+
+    expect(passInspections).toHaveLength(latePurchaseCount);
+    expect(new Set(passInspections.map(({ userId }) => userId))).toEqual(
+      new Set(late.map(({ userId }) => userId)),
+    );
+    for (const inspection of passInspections) {
+      const expected = late.find(({ userId }) => userId === inspection.userId);
+      expect(inspection).toMatchObject({
+        outcome: 'BOTH',
+        reservationId: expected?.reservationId,
+      });
+    }
+
+    for (const payload of late) {
+      const durable = await orderRow(h, payload.userId);
+      const job = await h.queue.getJob(buildOrdersJobId(h.env.SALE_ID, payload.userId));
+      if (durable?.id === payload.reservationId && durable.status === 'persisted') continue;
+      expect(job?.data).toMatchObject({
+        saleId: h.env.SALE_ID,
+        userId: payload.userId,
+        reservationId: payload.reservationId,
+      });
+      expect(await job?.getState()).toMatch(/^(waiting|active|delayed|failed)$/);
+    }
+
+    const durableRows = await eventually(
+      async () =>
+        h.pool.query<{
+          id: string;
+          user_id: string;
+          status: string;
+          created_at_ms: string;
+        }>(
+          `SELECT id,user_id,status,
+                  (extract(epoch from created_at)*1000)::bigint::text AS created_at_ms
+           FROM orders WHERE sale_id=$1 ORDER BY user_id`,
+          [h.env.SALE_ID],
+        ),
+      (result) =>
+        result.rows.length === latePurchaseCount &&
+        result.rows.every(({ status }) => status === 'persisted'),
+      'all late reservations persist',
+      30_000,
+    );
+
+    const lateByUser = new Map(late.map((payload) => [payload.userId, payload]));
+    const startsAtMs = Date.parse(h.env.SALE_STARTS_AT);
+    const endsAtMs = Date.parse(h.env.SALE_ENDS_AT);
+    expect(new Set(durableRows.rows.map(({ user_id }) => user_id)).size).toBe(latePurchaseCount);
+    for (const row of durableRows.rows) {
+      const expected = lateByUser.get(row.user_id);
+      expect(row.id).toBe(expected?.reservationId);
+      expect(Number(row.created_at_ms)).toBe(expected?.reservedAtMs);
+      expect(Number(row.created_at_ms)).toBeGreaterThanOrEqual(startsAtMs);
+      expect(Number(row.created_at_ms)).toBeLessThan(endsAtMs);
+    }
+
+    const keys = saleKeys(h.env.SALE_ID);
+    expect(await stock(h)).toBe(h.env.SALE_TOTAL_STOCK - latePurchaseCount);
+    expect(await h.redis.hlen(keys.reservations)).toBe(latePurchaseCount);
+    expect(await h.redis.scard(keys.buyers)).toBe(latePurchaseCount);
+    expect(
+      Number(
+        (
+          await h.pool.query<{ count: string }>(
+            'SELECT count(DISTINCT user_id)::text AS count FROM orders WHERE sale_id=$1',
+            [h.env.SALE_ID],
+          )
+        ).rows[0]?.count,
+      ),
+    ).toBe(latePurchaseCount);
+    for (const payload of late) {
+      expect(await h.store.getReservation(h.env.SALE_ID, payload.userId)).toMatchObject({
+        reservationId: payload.reservationId,
+        reservedAtMs: payload.reservedAtMs,
+      });
+    }
+    expect(await h.queue.getJobCounts('waiting', 'active', 'delayed', 'failed')).toMatchObject({
+      waiting: 0,
+      active: 0,
+      delayed: 0,
+      failed: 0,
+    });
+
+    const stableBuyerOnly = 'usr-a4-stable-buyer-only';
+    await h.redis.sadd(keys.buyers, stableBuyerOnly);
+    await expect(h.reconciliation.triggerPass()).rejects.toThrow(
+      `unrecoverable buyer-only identity for ${stableBuyerOnly}`,
+    );
+    expect(await h.redis.sismember(keys.buyers, stableBuyerOnly)).toBe(1);
+    let degradedStatus = 0;
+    new HealthController(h.health).getReady({
+      status(code) {
+        degradedStatus = code;
+      },
+    });
+    expect(degradedStatus).toBe(503);
+  }, 120_000);
 });

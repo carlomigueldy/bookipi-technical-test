@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReservationMembershipInspection } from '@flash/redis';
 import { BULLMQ_MAX_STALLED_FAILED_REASON } from '../orders/orders.consumer.js';
+import type { DurableOrder } from '../orders/order.repository.js';
 import {
   createReconciliationState,
   isTerminalFailedJobEligible,
@@ -59,7 +61,14 @@ function makeService() {
       current: candidate,
     })),
     scanReservations: vi.fn(async () => ({ cursor: '0', entries: [] })),
-    scanBuyers: vi.fn(async () => ({ cursor: '0', userIds: [] })),
+    scanBuyers: vi.fn(async (): Promise<{ cursor: string; userIds: string[] }> => ({
+      cursor: '0',
+      userIds: [],
+    })),
+    inspectReservationMembership: vi.fn(async (): Promise<ReservationMembershipInspection> => ({
+      outcome: 'NEITHER',
+      reservation: null,
+    })),
     reconcileBuyerMembership: vi.fn(async () => 'PRESENT'),
     reconcileStockFromReservations: vi.fn(async () => ({ outcome: 'RECONCILED' })),
   };
@@ -90,7 +99,7 @@ function makeService() {
     ensureSale: vi.fn(async () => undefined),
     listSaleOrders: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
     resolveFailed: vi.fn(async () => 'persisted'),
-    getByUser: vi.fn(async () => null),
+    getByUser: vi.fn(async (): Promise<DurableOrder | null> => null),
   };
   const consumer = {
     ready: true,
@@ -116,6 +125,29 @@ function makeService() {
     repository,
     consumer,
     state,
+  };
+}
+
+function runDiff(service: ReconciliationService) {
+  return (
+    service as unknown as {
+      runDiff(): Promise<{ degraded: boolean; queueIssueCount: number }>;
+    }
+  ).runDiff();
+}
+
+function durableOrder(
+  status: 'persisted' | 'compensated' = 'persisted',
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id: R1,
+    userId: payload.userId,
+    saleId: payload.saleId,
+    status,
+    createdAtMs: payload.reservedAtMs,
+    requestId: payload.requestId,
+    ...overrides,
   };
 }
 
@@ -732,6 +764,170 @@ describe('ReconciliationService', () => {
     expect(repository.ensureSale.mock.calls.length).toBeGreaterThan(0);
     expect(state.bootstrapReconciled).toBe(false);
     expect(consumer.start).not.toHaveBeenCalled();
+  });
+
+  it('A4 — late BOTH identity is queued and does not degrade a clean pass', async () => {
+    const { service, store, queue } = makeService();
+    const reservation = { userId: payload.userId, reservationId: R1, reservedAtMs: 123 };
+    store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+    store.inspectReservationMembership.mockResolvedValue({
+      outcome: 'BOTH',
+      reservation,
+    });
+
+    await expect(runDiff(service)).resolves.toEqual({ degraded: false, queueIssueCount: 0 });
+    expect(queue.add).toHaveBeenCalledOnce();
+    expect(queue.add.mock.calls[0]?.[1]).toEqual(expect.objectContaining(reservation));
+    expect(store.reconcileBuyerMembership).not.toHaveBeenCalled();
+  });
+
+  it('A4 — stale buyer scan classified NEITHER is ignored without repair or failure', async () => {
+    const { service, store, queue, repository } = makeService();
+    store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+
+    await expect(runDiff(service)).resolves.toEqual({ degraded: false, queueIssueCount: 0 });
+    expect(store.inspectReservationMembership).toHaveBeenCalledOnce();
+    expect(store.reconcileBuyerMembership).not.toHaveBeenCalled();
+    expect(store.compareAndRestoreReservation).not.toHaveBeenCalled();
+    expect(repository.getByUser).not.toHaveBeenCalled();
+    expect(queue.getJob).not.toHaveBeenCalled();
+  });
+
+  it('A4 — RESERVATION_ONLY identity restores membership and queue coverage', async () => {
+    const { service, store, queue } = makeService();
+    const reservation = { userId: payload.userId, reservationId: R1, reservedAtMs: 123 };
+    store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+    store.inspectReservationMembership.mockResolvedValue({
+      outcome: 'RESERVATION_ONLY',
+      reservation,
+    });
+
+    await expect(runDiff(service)).resolves.toEqual({ degraded: false, queueIssueCount: 0 });
+    expect(queue.add).toHaveBeenCalledOnce();
+    expect(store.reconcileBuyerMembership).toHaveBeenCalledOnce();
+    expect(store.reconcileBuyerMembership).toHaveResolvedWith('PRESENT');
+  });
+
+  it('A4 — fresh persisted or live-queue identity recovers BUYER_ONLY then re-inspects once', async () => {
+    const persistedCase = makeService();
+    const reservation = { userId: payload.userId, reservationId: R1, reservedAtMs: 123 };
+    persistedCase.store.scanBuyers.mockResolvedValue({
+      cursor: '0',
+      userIds: [payload.userId],
+    });
+    persistedCase.store.inspectReservationMembership
+      .mockResolvedValueOnce({ outcome: 'BUYER_ONLY', reservation: null })
+      .mockResolvedValueOnce({ outcome: 'BOTH', reservation });
+    persistedCase.repository.getByUser.mockResolvedValue(durableOrder());
+    await expect(runDiff(persistedCase.service)).resolves.toEqual({
+      degraded: false,
+      queueIssueCount: 0,
+    });
+    expect(persistedCase.store.compareAndRestoreReservation).toHaveBeenCalledWith(
+      payload.saleId,
+      expect.objectContaining(reservation),
+    );
+    expect(persistedCase.store.inspectReservationMembership).toHaveBeenCalledTimes(2);
+
+    const queueCase = makeService();
+    queueCase.store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+    queueCase.store.inspectReservationMembership
+      .mockResolvedValueOnce({ outcome: 'BUYER_ONLY', reservation: null })
+      .mockResolvedValueOnce({ outcome: 'BOTH', reservation });
+    queueCase.queue.getJob.mockResolvedValue(queueJob(R1, 'waiting'));
+    await expect(runDiff(queueCase.service)).resolves.toEqual({
+      degraded: false,
+      queueIssueCount: 0,
+    });
+    expect(queueCase.store.compareAndRestoreReservation).toHaveBeenCalledWith(
+      payload.saleId,
+      expect.objectContaining(reservation),
+    );
+    expect(queueCase.store.inspectReservationMembership).toHaveBeenCalledTimes(2);
+  });
+
+  it('A4 — same-sale compensated identity permits only atomic stale-membership cleanup', async () => {
+    const { service, store, repository } = makeService();
+    store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+    store.inspectReservationMembership
+      .mockResolvedValueOnce({ outcome: 'BUYER_ONLY', reservation: null })
+      .mockResolvedValueOnce({ outcome: 'NEITHER', reservation: null });
+    store.reconcileBuyerMembership.mockResolvedValue('ABSENT');
+    repository.getByUser.mockResolvedValue(durableOrder('compensated'));
+
+    await expect(runDiff(service)).resolves.toEqual({ degraded: false, queueIssueCount: 0 });
+    expect(store.reconcileBuyerMembership).toHaveBeenCalledOnce();
+    expect(store.compareAndRestoreReservation).not.toHaveBeenCalled();
+    expect(store.compensate).not.toHaveBeenCalled();
+  });
+
+  it('A4 — stable BUYER_ONLY remains present, fails the pass, and keeps readiness 503', async () => {
+    const { service, store, repository, state } = makeService();
+    state.reconciliationHealthy = true;
+    store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+    store.inspectReservationMembership.mockResolvedValue({
+      outcome: 'BUYER_ONLY',
+      reservation: null,
+    });
+    repository.getByUser.mockResolvedValue(durableOrder());
+
+    await expect(service.triggerPass()).rejects.toThrow(
+      `unrecoverable buyer-only identity for ${payload.userId}`,
+    );
+    expect(state.reconciliationHealthy).toBe(false);
+    expect(store.reconcileBuyerMembership).not.toHaveBeenCalled();
+    expect(store.inspectReservationMembership).toHaveBeenCalledTimes(2);
+  });
+
+  it('A4 — cross-sale PG row and malformed or mismatched targeted job are not recovery authority', async () => {
+    const cases = [
+      {
+        row: durableOrder('persisted', { saleId: 'other-sale' }),
+        job: null,
+      },
+      {
+        row: null,
+        job: queueJob(R1, 'waiting', { name: 'malformed' }),
+      },
+      {
+        row: null,
+        job: queueJob(R1, 'waiting', {
+          data: { ...payload, userId: 'user-002' },
+        }),
+      },
+    ];
+    for (const testCase of cases) {
+      const { service, store, queue, repository } = makeService();
+      store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+      store.inspectReservationMembership.mockResolvedValue({
+        outcome: 'BUYER_ONLY',
+        reservation: null,
+      });
+      repository.getByUser.mockResolvedValue(testCase.row);
+      queue.getJob.mockResolvedValue(testCase.job);
+      await expect(runDiff(service)).rejects.toThrow(
+        `unrecoverable buyer-only identity for ${payload.userId}`,
+      );
+      expect(store.compareAndRestoreReservation).not.toHaveBeenCalled();
+      expect(store.reconcileBuyerMembership).not.toHaveBeenCalled();
+    }
+  });
+
+  it('A4 — apparent buyer-only work is bounded to two inspections and one PG/job lookup', async () => {
+    const { service, store, queue, repository } = makeService();
+    const reservation = { userId: payload.userId, reservationId: R1, reservedAtMs: 123 };
+    store.scanBuyers.mockResolvedValue({ cursor: '0', userIds: [payload.userId] });
+    store.inspectReservationMembership
+      .mockResolvedValueOnce({ outcome: 'BUYER_ONLY', reservation: null })
+      .mockResolvedValueOnce({ outcome: 'BOTH', reservation });
+    repository.getByUser.mockResolvedValue(durableOrder());
+
+    await expect(runDiff(service)).resolves.toEqual({ degraded: false, queueIssueCount: 0 });
+    expect(store.inspectReservationMembership).toHaveBeenCalledTimes(2);
+    expect(repository.getByUser).toHaveBeenCalledOnce();
+    expect(queue.getJob).toHaveBeenCalledOnce();
+    expect(store.scanReservations).toHaveBeenCalledOnce();
+    expect(store.scanBuyers).toHaveBeenCalledOnce();
   });
 
   it('only a complete clean pass clears retained readiness incidents', async () => {

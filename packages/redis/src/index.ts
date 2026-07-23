@@ -19,6 +19,8 @@ import type {
   ReconcileStateResult,
   BuyerScanPage,
   ReservationEntry,
+  ReservationMembershipInspection,
+  ReservationMembershipOutcome,
   ReservationRestoreInput,
   SaleConfigInput,
   SaleSnapshot,
@@ -35,6 +37,7 @@ import {
   RECONCILE_SCRIPT,
   RECONCILE_MEMBERSHIP_SCRIPT,
   RECONCILE_STATE_SCRIPT,
+  INSPECT_RESERVATION_MEMBERSHIP_SCRIPT,
 } from './scripts/registry';
 import type { LuaScript } from './scripts/registry';
 import { isNoScriptError, runScript } from './scripts/run';
@@ -52,6 +55,7 @@ export {
   RECONCILE_SCRIPT,
   RECONCILE_MEMBERSHIP_SCRIPT,
   RECONCILE_STATE_SCRIPT,
+  INSPECT_RESERVATION_MEMBERSHIP_SCRIPT,
   isNoScriptError,
   runScript,
 };
@@ -69,6 +73,8 @@ export type {
   ReconcileStateResult,
   BuyerScanPage,
   ReservationEntry,
+  ReservationMembershipInspection,
+  ReservationMembershipOutcome,
   ReservationRestoreInput,
   SaleConfigInput,
   SaleSnapshot,

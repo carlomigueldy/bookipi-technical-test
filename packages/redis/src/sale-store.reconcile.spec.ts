@@ -9,7 +9,7 @@
 //     and chunked, pipelined restoration of the reservations ledger, so a cold rebuild
 //     can restore the I2 guard (not just the stock counter) without ever calling the
 //     banned SMEMBERS/HGETALL.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
 import { saleKeys } from '@flash/shared';
@@ -636,6 +636,144 @@ describe('SaleRedisStore.compareAndRestoreReservation — Phase 3 A2 identity CA
       );
       expect(await client.exists(saleKeys(targetSaleId).reservations)).toBe(0);
     } finally {
+      client.disconnect();
+    }
+  });
+});
+
+describe('SaleRedisStore.inspectReservationMembership — Phase 5 A4 atomic inspection', () => {
+  let saleId: string | undefined;
+
+  afterEach(async () => {
+    if (saleId) {
+      await cleanup(saleId);
+      saleId = undefined;
+    }
+  });
+
+  async function identityState(client: ReturnType<typeof connect>, userId: string) {
+    const keys = saleKeys(saleId!);
+    return {
+      buyerCount: await client.scard(keys.buyers),
+      reservationCount: await client.hlen(keys.reservations),
+      buyerMember: await client.sismember(keys.buyers, userId),
+      reservationValue: await client.hget(keys.reservations, userId),
+    };
+  }
+
+  it('A4 — inspection classifies BOTH from one read-only Redis serialization point', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 5 });
+    const userId = 'a4-both-buyer';
+
+    try {
+      const purchase = await store.purchase(saleId, userId);
+      const before = await identityState(client, userId);
+
+      expect(await store.inspectReservationMembership(saleId, userId)).toEqual({
+        outcome: 'BOTH',
+        reservation: {
+          userId,
+          reservationId: purchase.reservationId,
+          reservedAtMs: expect.any(Number),
+        },
+      });
+      expect(await identityState(client, userId)).toEqual(before);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('A4 — inspection classifies NEITHER without mutating either key', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 5 });
+    const userId = 'a4-neither-buyer';
+
+    try {
+      const before = await identityState(client, userId);
+      expect(await store.inspectReservationMembership(saleId, userId)).toEqual({
+        outcome: 'NEITHER',
+        reservation: null,
+      });
+      expect(await identityState(client, userId)).toEqual(before);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('A4 — inspection distinguishes BUYER_ONLY from RESERVATION_ONLY without repair', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 5 });
+    const keys = saleKeys(saleId);
+    const buyerOnlyUserId = 'a4-buyer-only';
+    const reservationOnlyUserId = 'a4-reservation-only';
+    const reservationId = randomUUID();
+    const reservedAtMs = 1_700_000_000_005;
+    await client.sadd(keys.buyers, buyerOnlyUserId);
+    await client.hset(keys.reservations, reservationOnlyUserId, `${reservationId}:${reservedAtMs}`);
+
+    try {
+      const buyerBefore = await identityState(client, buyerOnlyUserId);
+      const reservationBefore = await identityState(client, reservationOnlyUserId);
+
+      expect(await store.inspectReservationMembership(saleId, buyerOnlyUserId)).toEqual({
+        outcome: 'BUYER_ONLY',
+        reservation: null,
+      });
+      expect(await store.inspectReservationMembership(saleId, reservationOnlyUserId)).toEqual({
+        outcome: 'RESERVATION_ONLY',
+        reservation: { userId: reservationOnlyUserId, reservationId, reservedAtMs },
+      });
+      expect(await identityState(client, buyerOnlyUserId)).toEqual(buyerBefore);
+      expect(await identityState(client, reservationOnlyUserId)).toEqual(reservationBefore);
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('A4 — inspection strictly parses reservation identity and rejects malformed values', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 5 });
+    const keys = saleKeys(saleId);
+    const validUserId = 'a4-valid-legacy';
+    const malformedUserId = 'a4-malformed-ledger';
+    const reservationId = randomUUID();
+    await client.hset(keys.reservations, validUserId, reservationId);
+    await client.hset(keys.reservations, malformedUserId, 'not-a-reservation');
+
+    try {
+      expect(await store.inspectReservationMembership(saleId, validUserId)).toEqual({
+        outcome: 'RESERVATION_ONLY',
+        reservation: { userId: validUserId, reservationId, reservedAtMs: null },
+      });
+      await expect(store.inspectReservationMembership(saleId, malformedUserId)).rejects.toThrow(
+        `malformed reservation ledger value for user '${malformedUserId}'`,
+      );
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  it('A4 — inspection rejects invalid userId before Redis execution', async () => {
+    const client = connect();
+    const store = new SaleRedisStore(client);
+    saleId = await seedActiveSale(store, { stock: 5 });
+    const evalsha = vi.spyOn(client, 'evalsha');
+    const evalScript = vi.spyOn(client, 'eval');
+
+    try {
+      await expect(store.inspectReservationMembership(saleId, ' invalid ')).rejects.toThrow(
+        new TypeError('Invalid reservation-membership userId'),
+      );
+      expect(evalsha).not.toHaveBeenCalled();
+      expect(evalScript).not.toHaveBeenCalled();
+    } finally {
+      evalsha.mockRestore();
+      evalScript.mockRestore();
       client.disconnect();
     }
   });

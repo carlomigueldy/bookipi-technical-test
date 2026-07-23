@@ -32,6 +32,7 @@ import {
 import {
   COMPARE_RESTORE_RESERVATION_SCRIPT,
   COMPENSATE_SCRIPT,
+  INSPECT_RESERVATION_MEMBERSHIP_SCRIPT,
   PURCHASE_SCRIPT,
   RECONCILE_MEMBERSHIP_SCRIPT,
   RECONCILE_SCRIPT,
@@ -53,6 +54,8 @@ import type {
   ReconcileStateOutcome,
   ReconcileStateResult,
   ReservationEntry,
+  ReservationMembershipInspection,
+  ReservationMembershipOutcome,
   ReservationRestoreInput,
   SaleConfigInput,
   SaleSnapshot,
@@ -87,6 +90,13 @@ const COMPARE_RESTORE_RESERVATION_OUTCOMES: readonly CompareRestoreReservationOu
   'RESTORED',
   'ALREADY_MATCHED',
   'CONFLICT',
+];
+
+const RESERVATION_MEMBERSHIP_OUTCOMES: readonly ReservationMembershipOutcome[] = [
+  'BOTH',
+  'NEITHER',
+  'BUYER_ONLY',
+  'RESERVATION_ONLY',
 ];
 
 /** Chunk size for the pipelined writes in `restoreReservations`. */
@@ -132,6 +142,43 @@ function parseReservationEntry(userId: string, value: string): ReservationEntry 
   }
 
   return { userId, reservationId, reservedAtMs };
+}
+
+function assertReservationMembershipUserId(userId: string): void {
+  if (
+    typeof userId !== 'string' ||
+    userId !== userId.trim() ||
+    userId.length < USER_ID_MIN_LENGTH ||
+    userId.length > USER_ID_MAX_LENGTH ||
+    !USER_ID_PATTERN.test(userId)
+  ) {
+    throw new TypeError('Invalid reservation-membership userId');
+  }
+}
+
+function decodeReservationMembershipInspection(
+  userId: string,
+  raw: unknown,
+): ReservationMembershipInspection {
+  if (!Array.isArray(raw) || raw.length !== 2 || raw.some((value) => typeof value !== 'string')) {
+    throw new Error('SaleRedisStore: malformed reservation-membership tuple from Lua');
+  }
+
+  const [rawOutcome, storedValue] = raw as [string, string];
+  const outcome = assertMember(
+    rawOutcome,
+    RESERVATION_MEMBERSHIP_OUTCOMES,
+    'reservation-membership',
+  );
+  const reservationBearing = outcome === 'BOTH' || outcome === 'RESERVATION_ONLY';
+  if (reservationBearing === (storedValue.length === 0)) {
+    throw new Error('SaleRedisStore: malformed reservation-membership tuple from Lua');
+  }
+
+  return {
+    outcome,
+    reservation: reservationBearing ? parseReservationEntry(userId, storedValue) : null,
+  };
 }
 
 function assertCompareRestoreReservationInput(
@@ -340,6 +387,23 @@ export class SaleRedisStore {
     const keys = saleKeys(saleId);
     const value = await this.client.hget(keys.reservations, userId);
     return value === null ? null : parseReservationEntry(userId, value);
+  }
+
+  /** Atomically inspects one identity across the buyers Set and reservations Hash. */
+  async inspectReservationMembership(
+    saleId: string,
+    userId: string,
+  ): Promise<ReservationMembershipInspection> {
+    assertSaleId(saleId);
+    assertReservationMembershipUserId(userId);
+    const keys = saleKeys(saleId);
+    const raw = await runScript<unknown>(
+      this.client,
+      INSPECT_RESERVATION_MEMBERSHIP_SCRIPT,
+      [keys.buyers, keys.reservations],
+      [userId],
+    );
+    return decodeReservationMembershipInspection(userId, raw);
   }
 
   /** Cursor-paged buyer enumeration; never materializes the full Set. */

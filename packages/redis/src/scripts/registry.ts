@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 
 import { COMPARE_RESTORE_RESERVATION_LUA_SRC } from './compare-restore-reservation.lua';
 import { COMPENSATE_LUA_SRC } from './compensate.lua';
+import { INSPECT_RESERVATION_MEMBERSHIP_LUA_SRC } from './inspect-reservation-membership.lua';
 import { PURCHASE_LUA_SRC } from './purchase.lua';
 import { RECONCILE_LUA_SRC } from './reconcile.lua';
 import { RECONCILE_MEMBERSHIP_LUA_SRC } from './reconcile-membership.lua';
@@ -25,7 +26,8 @@ export interface LuaScript {
     | 'reconcile'
     | 'reconcile-membership'
     | 'reconcile-state'
-    | 'compare-restore-reservation';
+    | 'compare-restore-reservation'
+    | 'inspect-reservation-membership';
   readonly src: string;
   readonly sha1: string;
   readonly numKeys: number;
@@ -94,6 +96,13 @@ export const COMPARE_RESTORE_RESERVATION_SCRIPT: LuaScript = {
   numKeys: 2,
 };
 
+export const INSPECT_RESERVATION_MEMBERSHIP_SCRIPT: LuaScript = {
+  name: 'inspect-reservation-membership',
+  src: INSPECT_RESERVATION_MEMBERSHIP_LUA_SRC,
+  sha1: sha1(INSPECT_RESERVATION_MEMBERSHIP_LUA_SRC),
+  numKeys: 2,
+};
+
 export const LUA_SCRIPTS: readonly LuaScript[] = [
   PURCHASE_SCRIPT,
   COMPENSATE_SCRIPT,
@@ -103,4 +112,5 @@ export const LUA_SCRIPTS: readonly LuaScript[] = [
   RECONCILE_MEMBERSHIP_SCRIPT,
   RECONCILE_STATE_SCRIPT,
   COMPARE_RESTORE_RESERVATION_SCRIPT,
+  INSPECT_RESERVATION_MEMBERSHIP_SCRIPT,
 ];

@@ -186,10 +186,236 @@ jobs:
       - name: Validate compose file
         run: docker compose -f infra/docker-compose.yml config -q
 
-  k6-smoke:
-    needs: [build]
+  load-changes:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    if: false
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
     steps:
-      - name: k6 smoke placeholder
-        run: echo "k6 smoke lands in Phase 5"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect load-relevant pull request changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            apps/api \
+            apps/worker \
+            packages/redis \
+            packages/shared \
+            infra \
+            load \
+            scripts/stress.mjs \
+            package.json \
+            pnpm-lock.yaml; then
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  k6-smoke:
+    needs: [build, integration, load-changes]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && needs.load-changes.outputs.run == 'true'
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flash
+          POSTGRES_PASSWORD: flash
+          POSTGRES_DB: flash
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flash -d flash"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      API_HOST: 127.0.0.1
+      API_PORT: 3000
+      WORKER_HEALTH_PORT: 3001
+      CORS_ORIGIN: http://127.0.0.1:3000
+      DATABASE_URL: postgresql://flash:flash@127.0.0.1:5432/flash
+      REDIS_URL: redis://127.0.0.1:6379
+      ORDERS_QUEUE_NAME: orders
+      RATE_LIMIT_MAX: 1000000
+      RATE_LIMIT_WINDOW_MS: 1000
+      RATE_LIMIT_USER_MAX: 100
+      RATE_LIMIT_USER_WINDOW_MS: 1000
+      PG_POOL_MAX: 10
+      PG_STATEMENT_TIMEOUT_MS: 2000
+      WORKER_CONCURRENCY: 16
+      WORKER_PG_POOL_MAX: 10
+      WORKER_PG_STATEMENT_TIMEOUT_MS: 2000
+      STRESS_PROFILE: smoke
+      SCENARIO: smoke
+      SCENARIO_TOKEN: smoke
+      REPETITION: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build API and worker
+        run: pnpm --filter @flash/api... --filter @flash/worker... build
+      - name: Apply database schema
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          PGPASSWORD=flash psql \
+            --host=127.0.0.1 \
+            --port=5432 \
+            --username=flash \
+            --dbname=flash \
+            --set=ON_ERROR_STOP=1 \
+            --file=infra/postgres/init/001_schema.sql >/dev/null
+      - name: Generate unique active smoke sale
+        run: |
+          set -euo pipefail
+          run_id="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sale_id="p5-${run_id}-smoke"
+          now_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
+          starts_at_ms="$((now_ms - 60000))"
+          ends_at_ms="$((now_ms + 1800000))"
+          starts_at="$(node -e 'process.stdout.write(new Date(Number(process.argv[1])).toISOString())' "$starts_at_ms")"
+          ends_at="$(node -e 'process.stdout.write(new Date(Number(process.argv[1])).toISOString())' "$ends_at_ms")"
+          mkdir -p ".ci-k6" "load/results/raw/${run_id}/smoke/r1"
+          {
+            echo "RUN_ID=${run_id}"
+            echo "SALE_ID=${sale_id}"
+            echo "SALE_NAME=Phase 5 CI smoke ${run_id}"
+            echo "SALE_STARTS_AT=${starts_at}"
+            echo "SALE_ENDS_AT=${ends_at}"
+            echo 'SALE_TOTAL_STOCK=200'
+            echo "STARTS_AT_MS=${starts_at_ms}"
+            echo "ENDS_AT_MS=${ends_at_ms}"
+            echo "K6_RESULTS_DIR=load/results/raw/${run_id}"
+          } >> "$GITHUB_ENV"
+      - name: Start built API and worker
+        run: |
+          set -euo pipefail
+          node apps/api/dist/main.js > .ci-k6/api.log 2>&1 &
+          api_pid=$!
+          echo "$api_pid" > .ci-k6/api.pid
+          echo "API_PID=$api_pid" >> "$GITHUB_ENV"
+          node apps/worker/dist/main.js > .ci-k6/worker.log 2>&1 &
+          worker_pid=$!
+          echo "$worker_pid" > .ci-k6/worker.pid
+          echo "WORKER_PID=$worker_pid" >> "$GITHUB_ENV"
+      - name: Wait for bounded readiness
+        run: |
+          set -euo pipefail
+          command -v curl >/dev/null
+          ready=false
+          for attempt in $(seq 1 90); do
+            if ! kill -0 "$API_PID" 2>/dev/null; then
+              echo '::error::API exited before readiness'
+              exit 1
+            fi
+            if ! kill -0 "$WORKER_PID" 2>/dev/null; then
+              echo '::error::worker exited before readiness'
+              exit 1
+            fi
+            if curl --silent --show-error --fail --max-time 2 \
+              http://127.0.0.1:3000/api/health/ready >/dev/null 2>&1 && \
+              curl --silent --show-error --fail --max-time 2 \
+              http://127.0.0.1:3001/health/ready >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true || {
+            echo '::error::API and worker did not become ready within 90 seconds'
+            exit 1
+          }
+      - uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: '1.7.1'
+      - name: Run exact Phase 5 smoke workload
+        env:
+          API_URL: http://127.0.0.1:3000/api
+        run: |
+          set -euo pipefail
+          command -v k6 >/dev/null
+          k6 run load/k6/smoke.js
+          test -s "$K6_RESULTS_DIR/smoke/r1/k6-summary.json"
+          test -s "$K6_RESULTS_DIR/smoke/r1/k6-summary.txt"
+      - name: Audit smoke invariants
+        run: |
+          set -euo pipefail
+          confirmed="$(node -e "const fs=require('node:fs'); const s=JSON.parse(fs.readFileSync(process.env.K6_RESULTS_DIR+'/smoke/r1/k6-summary.json','utf8')); const n=s.phase5?.outcomes?.confirmed; if(!Number.isSafeInteger(n)) process.exit(1); process.stdout.write(String(n))")"
+          pnpm --filter @flash/load audit -- \
+            --run-id "$RUN_ID" \
+            --scenario smoke \
+            --sale-id "$SALE_ID" \
+            --initial-stock 200 \
+            --expected-confirmed "$confirmed" \
+            --api-url http://127.0.0.1:3000 \
+            --worker-url http://127.0.0.1:3001 \
+            --database-url "$DATABASE_URL" \
+            --redis-url "$REDIS_URL" \
+            --deadline-ms 120000 \
+            --out "$GITHUB_WORKSPACE/$K6_RESULTS_DIR/smoke/r1/audit.json"
+          test -s "$K6_RESULTS_DIR/smoke/r1/audit.json"
+      - name: Stop API and worker
+        if: always()
+        run: |
+          set -euo pipefail
+          cleanup_failed=false
+          for name in api worker; do
+            pid_file=".ci-k6/${name}.pid"
+            test -f "$pid_file" || continue
+            pid="$(cat "$pid_file")"
+            [[ "$pid" =~ ^[0-9]+$ ]] || {
+              echo "::error::invalid ${name} PID file"
+              cleanup_failed=true
+              continue
+            }
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -TERM "$pid"
+              for attempt in $(seq 1 40); do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.25
+              done
+            fi
+            if kill -0 "$pid" 2>/dev/null; then
+              echo "::error::${name} did not stop within 10 seconds"
+              kill -KILL "$pid" 2>/dev/null || true
+              cleanup_failed=true
+            fi
+          done
+          test "$cleanup_failed" = false
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            load/results/raw/ci-${{ github.run_id }}-${{ github.run_attempt }}/smoke/r1/k6-summary.json
+            load/results/raw/ci-${{ github.run_id }}-${{ github.run_attempt }}/smoke/r1/k6-summary.txt
+            load/results/raw/ci-${{ github.run_id }}-${{ github.run_attempt }}/smoke/r1/audit.json
+            .ci-k6/api.log
+            .ci-k6/worker.log
+          if-no-files-found: error
