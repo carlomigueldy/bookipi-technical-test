@@ -1297,3 +1297,389 @@ architecture §10 review, and root §11 gate are never reduced.
 - **I1–I4:** no runtime or documentation meaning changes.
 - **Git:** S2 remains forbidden to stage, commit, tag, push, or edit `STATE.md`.
 - **Protected state:** `.codex/` remains untouched, untracked, and out of scope.
+
+---
+
+## 16. AMENDMENT A2 — whitelisted Node runtime images and provenance-safe anonymous-volume cleanup
+
+**Authority:** architect (highest-capability / Opus-mapped)
+**Date:** 2026-07-23
+**Status:** FROZEN corrective implementation and cleanup contract
+**Amends:** §3.1/§3.3 final-stage restriction, §8.1 cleanup authority, §8.6
+runtime-image proof, §8.7 cleanup algorithm, and §11.1 candidate sequencing only.
+All S2 documentation, Phase 5 evidence boundaries, security rules, I1–I4
+mechanisms, and other gates remain unchanged.
+
+### 16.1 Reproduced defects and classification
+
+#### Finding 1 — broad `pnpm deploy` output reaches final Node images
+
+The committed candidate `e50262b` passed install, build, health, real purchase,
+persistence, duplicate rejection, and exact-stock checks. Its final API and worker
+images run as non-root `node` and contain nonempty `dist/main.js`. However, both
+also contain `/app/src` because:
+
+```dockerfile
+COPY --from=build --chown=node:node /prod/api .
+COPY --from=build --chown=node:node /prod/worker .
+```
+
+copy the whole `pnpm deploy` package output, including first-party source, tests,
+and build/development configuration. That contradicts §8.6's minimal final-image
+requirement. It is an image-assembly defect, not an application/runtime or
+invariant defect.
+
+Section 3.1's “no final-stage file set changes” and §3.3's broad-copy freeze made
+the required fix impossible. A2 explicitly supersedes those clauses only for the
+two exact final-stage `COPY` replacements below.
+
+#### Finding 2 — integration containers leave two new anonymous volumes
+
+The failed fresh-clone gate restored the exact container and network baselines,
+removed ordinary named resources/project images, and left the five application
+ports unused. Its volume set grew from 145 to 147. The harness's exact
+`after - before` ID difference is:
+
+```text
+515d0aadfe6830dcb6f8dfdb74b4d2b50a3d011e470507144a70a0740e2f2c5c
+cb386b839c89057d5431efa98e5e789d5d1f89f57485c75e9d5f19381adaa879
+```
+
+Read-only inspection on 2026-07-23 confirms:
+
+| Exact ID | CreatedAt | Driver / scope | Labels | Container references |
+| --- | --- | --- | --- | --- |
+| `515d0aadfe6830dcb6f8dfdb74b4d2b50a3d011e470507144a70a0740e2f2c5c` | `2026-07-23T06:36:21Z` | `local` / `local` | exactly `com.docker.volume.anonymous=""` | zero, including stopped containers |
+| `cb386b839c89057d5431efa98e5e789d5d1f89f57485c75e9d5f19381adaa879` | `2026-07-23T06:36:19Z` | `local` / `local` | exactly `com.docker.volume.anonymous=""` | zero, including stopped containers |
+
+They were created during the isolated integration gate before ordinary Compose.
+The executor correctly did not delete them: v1 authorized only named proof
+resources and had no provenance rule for anonymous volumes. A leaked volume makes
+cleanup RED even when functionality is green.
+
+### 16.2 Corrective ownership, skills, and strict order
+
+#### A2-I — final Node runtime whitelist (`implementer`)
+
+Mandatory skills, loaded in this order:
+
+1. `.agents/skills/multi-stage-dockerfile/SKILL.md`
+2. `.agents/skills/turborepo-monorepo/SKILL.md`
+
+Exclusive paths:
+
+```text
+infra/api.Dockerfile
+infra/worker.Dockerfile
+```
+
+A2-I does not own `.dockerignore`, `infra/web.Dockerfile`, Compose, application
+source, packages, dependencies, docs, `STATE.md`, Git, or `.codex/`.
+
+#### A2-C — exact anonymous-volume cleanup (`implementer`, operational only)
+
+Mandatory skill:
+
+1. `.agents/skills/multi-stage-dockerfile/SKILL.md`
+
+A2-C owns no repository path and edits nothing. It may perform only §16.5's
+read-only proof and exact non-forced volume removals. It must not run a workload,
+build an image, mutate a container/network, or touch Git/STATE/`.codex`.
+
+Strict order:
+
+1. architect freezes A2;
+2. A2-C resolves the two already-leaked volumes under §16.5, restoring the old
+   baseline before another gate starts;
+3. A2-I implements §16.3 and returns §16.4 evidence;
+4. root creates a new committed candidate under §16.7;
+5. root reruns §7 and all of §8 from the beginning, using §16.6 cleanup;
+6. security and final architecture reviews rerun on the new candidate.
+
+### 16.3 Exact API and worker final-stage whitelist
+
+In `infra/api.Dockerfile`, replace only:
+
+```dockerfile
+COPY --from=build --chown=node:node /prod/api .
+```
+
+with exactly:
+
+```dockerfile
+COPY --from=build --chown=node:node /prod/api/package.json ./package.json
+COPY --from=build --chown=node:node /prod/api/node_modules ./node_modules
+COPY --from=build --chown=node:node /prod/api/dist ./dist
+```
+
+In `infra/worker.Dockerfile`, replace only:
+
+```dockerfile
+COPY --from=build --chown=node:node /prod/worker .
+```
+
+with exactly:
+
+```dockerfile
+COPY --from=build --chown=node:node /prod/worker/package.json ./package.json
+COPY --from=build --chown=node:node /prod/worker/node_modules ./node_modules
+COPY --from=build --chown=node:node /prod/worker/dist ./dist
+```
+
+This is a whitelist at the final runtime seam:
+
+- `package.json` preserves CommonJS package interpretation and runtime metadata;
+- the deployed production `node_modules` remains self-contained, including copied
+  workspace runtime dependencies;
+- `dist` is the already-verified compiled application output;
+- first-party `src`, `test`, specs, TypeScript configs, Nest/Vitest/ESLint config,
+  workspace manifests, and unrelated deploy files never enter the final stage.
+
+Dependency packages may legitimately contain their own package metadata and files
+inside `/app/node_modules`; §8.6's first-party exclusion must not mistake installed
+dependency contents for application source.
+
+Everything else remains byte-for-byte unchanged:
+
+- Node `22.14-alpine`, pnpm `11.9.0`, full frozen install, build commands, and
+  `pnpm deploy --prod --legacy`;
+- `NODE_ENV=production`, `WORKDIR /app`, `USER node`, exposed port,
+  healthcheck, and `CMD ["node", "dist/main.js"]`;
+- build context, build-stage output, dependency graph, permissions/chown, web
+  image, and Compose behavior.
+
+Forbidden alternatives:
+
+- deleting files from `/prod/<app>` with a broad `find`/glob;
+- copying host `node_modules`, source, tests, configs, root package metadata, or
+  the whole deploy directory;
+- changing tsconfig emit, stripping required JavaScript, modifying application
+  imports, or adding a runtime bundle tool;
+- changing users/permissions, base image, healthcheck, command, dependency, or
+  lockfile;
+- using `.dockerignore` to hide files from `pnpm deploy` after the build.
+
+### 16.4 A2-I focused evidence
+
+From repository root, without building an image:
+
+```bash
+pnpm format:check
+for app in api worker; do
+  file="infra/${app}.Dockerfile"
+  test "$(rg -c "^COPY --from=build --chown=node:node /prod/${app}/package\\.json \\./package\\.json$" "$file")" -eq 1
+  test "$(rg -c "^COPY --from=build --chown=node:node /prod/${app}/node_modules \\./node_modules$" "$file")" -eq 1
+  test "$(rg -c "^COPY --from=build --chown=node:node /prod/${app}/dist \\./dist$" "$file")" -eq 1
+  test "$(rg -c "^COPY --from=build --chown=node:node /prod/${app} \\.$" "$file" || true)" -eq 0
+done
+test "$(
+  git diff --name-only -- infra/api.Dockerfile infra/worker.Dockerfile
+)" = "$(
+  printf '%s\n' infra/api.Dockerfile infra/worker.Dockerfile
+)"
+git diff --check -- infra/api.Dockerfile infra/worker.Dockerfile
+```
+
+Required: every command exits `0`; exactly one of each whitelist copy exists per
+file; both broad copies are absent; only the two A2-I files changed.
+
+Image construction remains root-owned fresh-clone evidence, not implementer
+self-certification.
+
+### 16.5 Immediate disposition of the two leaked volumes
+
+A2-C may remove the two exact IDs in §16.1 only if the root supplies the failed
+gate's preserved, byte-sorted before/after ID lists proving:
+
+```text
+after - before = exactly the two A2 IDs
+before - after = empty
+```
+
+Immediately before removal, for each exact ID:
+
+1. require the ID matches `^[0-9a-f]{64}$` and equals one of the two literals;
+2. `docker volume inspect <exact-id>` must succeed and match §16.1 exactly:
+   name equals ID, recorded `CreatedAt`, driver/scope `local`, options `null`,
+   and the sole label is `com.docker.volume.anonymous=""`;
+3. `docker ps -aq --filter volume=<exact-id>` must be empty, covering running and
+   stopped containers;
+4. inspect all container mount declarations and require neither ID/mountpoint is
+   referenced;
+5. do not read, list, copy, or alter volume contents.
+
+If every proof passes, run exactly:
+
+```bash
+docker volume rm 515d0aadfe6830dcb6f8dfdb74b4d2b50a3d011e470507144a70a0740e2f2c5c
+docker volume rm cb386b839c89057d5431efa98e5e789d5d1f89f57485c75e9d5f19381adaa879
+```
+
+No `--force`. Docker's atomic “volume is in use” rejection is the final
+attach-race guard. Any failed precondition or removal stops RED; never broaden the
+target. Afterward:
+
+```bash
+test -z "$(docker volume ls -q --filter name='^515d0aadfe6830dcb6f8dfdb74b4d2b50a3d011e470507144a70a0740e2f2c5c$')"
+test -z "$(docker volume ls -q --filter name='^cb386b839c89057d5431efa98e5e789d5d1f89f57485c75e9d5f19381adaa879$')"
+```
+
+Require the complete volume ID set equals the failed run's preserved `before`
+list. Record inspect/ref/removal/set-equality outputs. No `docker volume prune`,
+name prefix, label-wide deletion, pre-existing volume deletion, container
+mutation, or retry with force is authorized.
+
+### 16.6 Provenance-safe cleanup for every new fresh-clone run
+
+This supersedes §8.1's create/remove list and §8.7's volume-count comparison.
+Before any install/test:
+
+1. capture canonical UTC `gateStartedAt`;
+2. capture byte-sorted exact baseline container, network, and volume ID lists;
+3. require the ordinary named resource and candidate-image preflight from §8.1.
+
+After tests, Compose teardown, project-image removal, inspection-image removal,
+and temp-process shutdown:
+
+```bash
+LC_ALL=C sort -u docker-volumes.before > docker-volumes.before.sorted
+docker volume ls -q | LC_ALL=C sort -u > docker-volumes.after.sorted
+comm -23 docker-volumes.before.sorted docker-volumes.after.sorted > docker-volumes.missing
+comm -13 docker-volumes.before.sorted docker-volumes.after.sorted > docker-volumes.new
+test ! -s docker-volumes.missing
+```
+
+The actual harness may use in-memory arrays or files beneath its validated temp
+root; the set semantics above are exact. Capture canonical UTC `gateEndedAt`.
+
+For each line in `docker-volumes.new`, require all of:
+
+- exact `^[0-9a-f]{64}$` ID and absence from the before set;
+- `docker volume inspect` name equals ID;
+- `CreatedAt` parses and falls within inclusive
+  `[gateStartedAt, gateEndedAt]`;
+- driver and scope are exactly `local`;
+- options are null/empty;
+- labels contain exactly `com.docker.volume.anonymous=""`;
+- no running or stopped container references the ID;
+- no container mount declaration references its ID or mountpoint.
+
+Only IDs satisfying every predicate are gate-owned anonymous volumes. Recheck
+container references immediately before `docker volume rm <exact-id>`, remove
+each exact ID without `--force`, and stop on the first failure. A concurrent
+attach makes Docker reject removal and therefore keeps the gate RED.
+
+Never remove:
+
+- an ID present in the baseline;
+- a named volume;
+- an anonymous volume outside the captured set difference/time interval;
+- a volume with an extra/missing label, non-local driver/scope, options, container
+  reference, unparsable metadata, or changed identity;
+- anything selected by prefix, glob, broad label filter, `prune`, or force.
+
+After exact removals, require current byte-sorted volume IDs equal the baseline
+byte-for-byte. Container and network sets must also equal their baselines.
+Ordinary named resources, project images, inspection image, application ports,
+temp clone, and shared worktree checks from §8.7 remain mandatory.
+
+If `docker-volumes.new` is empty, perform no volume mutation and require equality.
+If a new volume is not safely removable, retain it, report its exact metadata,
+and fail the gate; do not improvise cleanup.
+
+### 16.7 Candidate invalidation and rerun scope
+
+Candidate `e50262b` is rejected as the Phase 6 gate candidate. Its functional
+evidence remains diagnostic only; it cannot be tagged, reviewed as final, or used
+for `STATE.md` closure because its image-content and cleanup requirements failed.
+
+After A2-C restores the pre-run volume baseline and A2-I passes focused evidence,
+root commits only:
+
+```text
+.claude/contracts/phase-6.md
+infra/api.Dockerfile
+infra/worker.Dockerfile
+```
+
+with:
+
+```text
+fix(infra): minimize production runtime images
+```
+
+The resulting new HEAD is the replacement immutable candidate. Do not amend,
+reuse, or tag `e50262b`; preserving the corrective commit makes the failed
+candidate and remediation auditable.
+
+Rerun requirements on the replacement candidate:
+
+1. all of root §7;
+2. all of fresh-clone §8 from preflight through functional/image proof and A2
+   cleanup;
+3. §9 security review;
+4. §10 final architecture review;
+5. §11 state/tag/PR gate only after all above are green.
+
+Section 8.6 now requires API and worker final containers to prove:
+
+```bash
+node -e "
+const fs = require('node:fs');
+const actual = fs.readdirSync('/app').sort();
+const expected = ['dist', 'node_modules', 'package.json'];
+if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+  throw new Error('unexpected final image top-level entries: ' + JSON.stringify(actual));
+}
+if (!fs.statSync('/app/dist/main.js').isFile() ||
+    fs.statSync('/app/dist/main.js').size <= 0) {
+  throw new Error('missing or empty dist/main.js');
+}
+"
+```
+
+Run it separately inside the exact API and worker final images, as their non-root
+runtime user. Also retain every original §8.6 exclusion, `Config.User=node`,
+health, persistence, duplicate, stock, history, sentinel, and cleanup assertion.
+The top-level whitelist applies to first-party `/app`, not dependency package
+internals under `node_modules`.
+
+S2's focused §6 evidence need not rerun only if root proves `README.md` and
+`docs/architecture.svg` are byte-identical to their green evidence. Root §7 still
+rechecks formatting, links/result integrity through its existing commands. No
+stress workload runs.
+
+### 16.8 Invariant and security effect
+
+- **I1–I4:** application bytes and all enforcement seams are unchanged. The full
+  fresh-clone functional/failure test graph must prove runtime assembly did not
+  omit a required dependency.
+- **Security:** final Node images expose only compiled first-party output,
+  production dependencies, and package metadata; non-root ownership and runtime
+  behavior remain exact.
+- **Cleanup:** deletion authority is narrowed to exact, newly observed,
+  gate-window, anonymous, local, unreferenced volumes. Absence of proof means no
+  deletion and a RED gate.
+- **Documentation/Phase 5:** preserved byte-for-byte; no live stress or new claim.
+- **Protected state:** no A2 role touches `.codex/`.
+
+### 16.9 Copy-ready A2 briefs
+
+> **A2-C immediate cleanup.** Role: `implementer` (general-purpose /
+> Sonnet-mapped), operational only. Read Phase 6 §16.1, §16.2, and §16.5 in full;
+> load `multi-stage-dockerfile`. Own no repository path. Require the root's exact
+> failed-run before/after volume lists, re-inspect the two literal IDs, prove
+> exact anonymous/local/timestamp metadata and zero running/stopped container or
+> mount references, then remove only those exact IDs with non-forced
+> `docker volume rm`. Verify both absent and the full volume set restored to the
+> before list. If any predicate fails, remove nothing and return RED. Never prune,
+> force, use a prefix/glob, run workload/build, or touch Git/STATE/`.codex`.
+
+> **A2-I runtime whitelist.** Role: `implementer` (general-purpose /
+> Sonnet-mapped). Read `AGENTS.md` and Phase 6 §16 in full. Load
+> `multi-stage-dockerfile`, then `turborepo-monorepo`. Own only
+> `infra/api.Dockerfile` and `infra/worker.Dockerfile`. Replace each broad final
+> deploy copy with the exact package.json/node_modules/dist whitelist in §16.3.
+> Preserve every other byte and all concurrent docs/contract work. Run §16.4 and
+> return actual output. Do not build/run Docker, edit dependencies/application/
+> web/Compose/docs/STATE/contracts, perform Git actions, or touch `.codex`.

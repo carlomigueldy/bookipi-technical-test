@@ -40,7 +40,9 @@ RUN pnpm --filter=@flash/worker --prod deploy --legacy /prod/worker
 FROM node:22.14-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-COPY --from=build --chown=node:node /prod/worker .
+COPY --from=build --chown=node:node /prod/worker/package.json ./package.json
+COPY --from=build --chown=node:node /prod/worker/node_modules ./node_modules
+COPY --from=build --chown=node:node /prod/worker/dist ./dist
 USER node
 EXPOSE 3001
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=6 \
