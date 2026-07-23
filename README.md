@@ -102,6 +102,47 @@ Production requires explicit `CORS_ORIGIN`, `DATABASE_URL`, `REDIS_URL`, and
 `SALE_ID`. Compose supplies its own in-network Redis and Postgres URLs. Do not use
 the host-side `5433` and `6380` ports from inside Compose.
 
+The checked-in local topology uses the `flash` Postgres database, user, and
+password and an unauthenticated Redis instance as development conveniences. Those
+defaults are not production-safe. A production deployment must:
+
+- publish neither Redis nor Postgres to the host or a public network, and place
+  both datastores on a private network reachable only by authorized services;
+- supply non-default Postgres database, user, and password values through its
+  secret manager; and
+- enable Redis ACL username/password authentication and encrypted transport
+  (`TLS`, using a `rediss://` URL), with credentials supplied through its secret
+  manager.
+
+These are deployment requirements, not authentication features implemented by the
+local Compose topology.
+
+### Reproducible container inputs
+
+The reviewed container inputs are versioned tags pinned to these multi-platform
+OCI index digests:
+
+| Input    | Exact reviewed reference                                                                     |
+| -------- | -------------------------------------------------------------------------------------------- |
+| Node     | `node:22.14-alpine@sha256:9bef0ef1e268f60627da9ba7d7605e8831d5b56ad07487d24d1aa386336d1944`  |
+| nginx    | `nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10`  |
+| Redis    | `redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99`   |
+| Postgres | `postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777` |
+| k6       | `grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f`   |
+
+The digest, rather than the tag, fixes the reviewed content while retaining
+platform selection from the OCI index. Future digest changes require explicit
+review and a versioned contract amendment; moving tags are not an update
+mechanism.
+
+Each application Dockerfile fetches the pnpm `11.9.0` tarball from
+`https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz` with Dockerfile checksum
+verification against
+`sha256:2b567aa66026238078ac2e0a33bec3febd60e962987aac697456f3180819b287`,
+then asserts `pnpm --version` before use. This fixes the consumed bootstrap bytes
+and fails closed on mismatch; a cold build still requires the npm registry to be
+available to download that tarball.
+
 ## Run path A: complete Docker stack
 
 ```bash
@@ -118,12 +159,18 @@ The running surfaces are:
 | Web              | <http://localhost:5173>              | `5173 → 80`           |
 | API              | <http://localhost:3000/api>          | `3000 → 3000`         |
 | Worker readiness | <http://localhost:3001/health/ready> | `3001 → 3001`         |
-| Postgres         | `localhost:5433`                     | `5433 → 5432`         |
-| Redis            | `localhost:6380`                     | `6380 → 6379`         |
+| Postgres         | `127.0.0.1:5433`                     | `5433 → 5432`         |
+| Redis            | `127.0.0.1:6380`                     | `6380 → 6379`         |
 
 The ordinary stack uses network `flash-net`, volumes `flash-pgdata` and
 `flash-redisdata`, and containers `flash-redis`, `flash-postgres`, `flash-api`,
 `flash-worker`, and `flash-web`.
+
+Redis and Postgres host ports are bound to `127.0.0.1` for local development
+only; they are not LAN-facing. This loopback mapping is a developer convenience,
+not a production network design. Production must leave datastore ports
+unpublished and use the private, authenticated topology described under
+[configuration](#prerequisites-and-configuration).
 
 Safe normal cleanup preserves the named datastore volumes:
 
@@ -236,7 +283,8 @@ The test layers cover:
 
 ## Stress guide and qualified Phase 5 result
 
-No global k6 installation is needed; the harness pins `grafana/k6:1.7.1`.
+No global k6 installation is needed; the harness pins
+`grafana/k6:1.7.1@sha256:4fd3a694926b064d3491d9b02b01cde886583c4931f1223816e3d9a7bdfa7e0f`.
 
 ```bash
 pnpm stress:smoke
@@ -276,6 +324,8 @@ disposition.
 
 For explicit machine-searchable status: live workload **NOT RUN**; performance,
 capacity, thresholds, and Phase 5 live I1–I4 **NOT EVALUATED**.
+The real stock-10 peak workload therefore did not complete in this constrained
+environment and is not represented as a passing stress result.
 
 ## Design decisions and trade-offs
 
