@@ -1,0 +1,14 @@
+{
+  "permissionProbe": 0,
+  "k6": 0,
+  "audit": 0,
+  "sampler": 0,
+  "observabilityBefore": 0,
+  "observabilityAfter": 0,
+  "containerPs": 0,
+  "containerInspect": 0,
+  "apiLogs": 0,
+  "workerLogs": 0,
+  "readinessEvidence": 0,
+  "cleanup": null
+}

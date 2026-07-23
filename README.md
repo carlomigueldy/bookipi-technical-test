@@ -304,28 +304,31 @@ The local-Docker acceptance targets remain:
 - purchase p99 `< 500 ms`;
 - status p95 `< 50 ms`.
 
-These targets are acceptance criteria, not observed results on this host. Before a
-run can publish a passing disposition, its terminal `pnpm stress:audit` checks
-Redis, Postgres, queue/readiness, and I1–I4. Raw evidence is ignored under
-`load/results/raw/`; the tracked
-[Phase 5 result](./load/results/phase-5-results.md) and
-[SHA-256 manifest](./load/results/phase-5-results.sha256) record the factual
-disposition.
+These targets are acceptance criteria, not a capacity claim. Before a run can
+publish a passing disposition, its terminal `pnpm stress:audit` checks Redis,
+Postgres, queue/readiness, and I1–I4. Raw evidence is ignored under
+`load/results/raw/`; the tracked [historical Phase 5
+disposition](./load/results/phase-5-results.md) and its
+[SHA-256 manifest](./load/results/phase-5-results.sha256) remain the original
+delivery record.
 
 **Status: COMPLETE — OWNER-AUTHORIZED ENVIRONMENT-LIMITED EVIDENCE BYPASS**
 
-> Phase 5 live stress was not run on the delivery host. Secure atomic audit
-> publication requires a root-owned, non-group/world-writable `/usr/bin/ln`; this
-> host reports uid 65534. The owner authorized skipping privileged host
-> remediation. The untuned baseline and final full stress were not run, tuning
-> was not eligible, and performance/capacity plus Phase 5 live I1–I4 are not
-> evaluated. On a compliant Linux host, run `pnpm stress`; do not bypass helper
-> validation.
+> The original delivery record did not run live stress because secure atomic audit
+> publication required a root-owned, non-group/world-writable `/usr/bin/ln`, while
+> the delivery host reported uid 65534. That historical disposition remains intact.
 
-For explicit machine-searchable status: live workload **NOT RUN**; performance,
-capacity, thresholds, and Phase 5 live I1–I4 **NOT EVALUATED**.
-The real stock-10 peak workload therefore did not complete in this constrained
-environment and is not represented as a passing stress result.
+A later partial full-profile diagnostic run is documented separately in the
+[post-delivery stress evidence amendment](./load/results/post-delivery-stress-2026-07-23.md)
+and its [tracked-only SHA-256 manifest](./load/results/post-delivery-stress-2026-07-23.sha256).
+Warmup and all three surge repetitions were correctness-clean; duplicate-storm r1
+preserved I1–I4 but failed latency and dropped-iteration gates. The measurement
+included the T2 listen-backlog candidate, which was reverted, so it is not a
+final-code capacity or latency claim. The run is therefore non-qualifying and does
+not change the original Phase 5 status. Its operational evidence included 64
+terminal enqueue failures, 3,315 reconciliation repairs, and one worker-readiness
+HTTP 503; later partial duplicate-storm, sold-out, and window-edge attempts are
+excluded and carry no pass claim.
 
 ## Design decisions and trade-offs
 
@@ -369,8 +372,9 @@ Accepted risks and required production work:
   scheduled poll. It is bounded and does not affect purchases, but can delay a
   manual refresh.
 - GitHub Actions currently cannot execute because of account billing.
-- Phase 5 live measurements remain unexecuted and no live capacity or invariant
-  conclusion is available.
+- The post-delivery full run is non-qualifying: its duplicate-storm correctness
+  audit passed, but latency and dropped-iteration acceptance criteria failed. Its
+  reverted T2 configuration cannot establish final-code capacity or latency.
 
 Authentication, payments, multiple sales/products, a cloud rollout, and deployed
 horizontal scaling remain out of scope.

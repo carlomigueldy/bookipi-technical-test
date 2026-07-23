@@ -599,6 +599,18 @@ None — PRD delivery is complete. An optional compliant-host stress rerun requi
 new architect-declared run ID and a versioned results amendment; it must not rewrite
 the qualified Phase 5 record.
 
+## Post-delivery amendment — 2026-07-23
+
+[`load/results/post-delivery-stress-2026-07-23.md`](./load/results/post-delivery-stress-2026-07-23.md)
+records a factual, non-qualifying full-profile measurement without reopening Phase 5
+or Phase 6. All three surge repetitions passed with clean I1–I4 audits. The
+duplicate-storm correctness and terminal I1–I4 audit also passed, but its latency
+and dropped-iteration gate failed, so the full matrix was not completed and the run
+does not support a qualifying performance claim. The measured T2 listen-backlog
+candidate was rejected and reverted. Scoped Docker cleanup was:
+`docker compose -p flash-load-20260723142302-6a2bc45c -f load/docker-compose.yml down -v --remove-orphans`,
+followed by removal of `bookipi-stress-orchestrator-t2`.
+
 ## Process notes
 
 **Verification reports are claims, not evidence.** Phase 0 was reported GREEN three
