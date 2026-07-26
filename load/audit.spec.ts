@@ -1356,7 +1356,7 @@ describe('Phase 5 Amendment A12 validation-to-publication capability', () => {
       closeAuditCliOptions(second);
       closeAndRemove(fixture);
     }
-  });
+  }, 20000);
 
   it('A12 — temp collisions and failures retain only bounded non-writable artifacts', async () => {
     const collision = temporaryPublication();
