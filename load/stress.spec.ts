@@ -1055,6 +1055,44 @@ describe('A5 harness hardening', () => {
     ).rejects.toThrow(/active interval/);
   });
 
+  it('A10 — settlement-edge sample missing k6 within the completion gap is tolerated', async () => {
+    // `docker compose run --rm k6` only resolves (setting workloadSettledAt) once the
+    // exited k6 container is actually removed, so a stats sample taken in that
+    // teardown window truthfully never sees k6. That is expected, not evidence loss.
+    const stats = statsCsv([
+      { timestamp: iso(2), services: core },
+      { timestamp: iso(3), services: complete },
+      { timestamp: iso(4), services: complete },
+      { timestamp: iso(1004), services: core },
+    ]);
+    const report = await validateSamplerEvidence(
+      await samplerFixture({
+        stats,
+        runtime: { workloadSettledAt: iso(1104), samplerStoppedAt: iso(2104) },
+      }),
+      iso(1),
+    );
+    expect(report.lastK6ObservedAt).toBe(iso(4));
+  });
+
+  it('A10 — sample missing k6 beyond the completion gap before settlement still fails', async () => {
+    const stats = statsCsv([
+      { timestamp: iso(2), services: core },
+      { timestamp: iso(3), services: complete },
+      { timestamp: iso(4), services: complete },
+      { timestamp: iso(4004), services: core },
+    ]);
+    await expect(
+      validateSamplerEvidence(
+        await samplerFixture({
+          stats,
+          runtime: { workloadSettledAt: iso(7604), samplerStoppedAt: iso(8604) },
+        }),
+        iso(1),
+      ),
+    ).rejects.toThrow(/pre-settlement sample missing k6/);
+  });
+
   it('A10 — late discovery sparse completion gap and stale final k6 observation fail', async () => {
     const lifecycle = { workloadSettledAt: iso(15_000), samplerStoppedAt: iso(16_000) };
     const late = statsCsv([

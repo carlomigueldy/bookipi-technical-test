@@ -796,8 +796,13 @@ export async function validateSamplerEvidence(scenarioDir, samplerStartedAt) {
   for (let index = firstK6Index; index <= lastK6Index; index += 1)
     if (!groups[index].services.has(WORKLOAD_STATS_SERVICE))
       throw new Error('container stats: missing k6 in active interval');
+  // `docker compose run --rm k6` only resolves (setting workloadSettledAt) once the
+  // exited k6 container has actually been removed, so a stats sample taken after k6
+  // exits but before that removal completes will truthfully never see it. Tolerate
+  // that inside the same completion-gap window already used to bound sampling
+  // cadence; anything earlier than that edge still must show k6.
   for (let index = lastK6Index + 1; index < groups.length; index += 1)
-    if (groups[index].timestamp < workloadSettled)
+    if (groups[index].timestamp < workloadSettled - STATS_MAX_COMPLETION_GAP_MS)
       throw new Error('container stats: pre-settlement sample missing k6');
   const completionGaps = [groups[0].timestamp - runtimeSamplerStarted];
   for (let index = 1; index < groups.length; index += 1)
@@ -1173,7 +1178,7 @@ export function startSamplers(config, scenarioDir, seams = {}) {
           ['worker', `${config.workerUrl}/health/ready`],
           ['metrics', `${config.apiUrl}/sale/metrics`],
         ]) {
-          const start = Date.now();
+          const start = monotonicWallMs();
           try {
             const response = await fetchImpl(url, {
               signal: AbortSignal.any([
@@ -1184,12 +1189,12 @@ export function startSamplers(config, scenarioDir, seams = {}) {
             });
             const body = await response.json();
             streams[key].write(
-              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: response.status, latencyMs: Date.now() - start, body })}\n`,
+              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: response.status, latencyMs: Math.round(monotonicWallMs() - start), body })}\n`,
             );
           } catch (error) {
             if (stopped && localAbort.signal.aborted) return;
             streams[key].write(
-              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: 0, latencyMs: Date.now() - start, error: String(error) })}\n`,
+              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: 0, latencyMs: Math.round(monotonicWallMs() - start), error: String(error) })}\n`,
             );
           }
         }
