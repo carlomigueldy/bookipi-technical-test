@@ -16,6 +16,21 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
+// This host's wall clock is not guaranteed monotonic (observed transient forward
+// jumps that later revert on WSL2). `Date.now()` reads taken at different call
+// sites (e.g. workloadSettledAt vs samplerStoppedAt) can therefore disagree about
+// ordering even when one is captured strictly after the other in program order.
+// Anchor a single monotonic source once and derive every sampler/lifecycle
+// timestamp from it so all comparisons share one non-decreasing clock.
+const monotonicAnchorWallMs = Date.now();
+const monotonicAnchorHr = process.hrtime.bigint();
+function monotonicWallMs() {
+  return monotonicAnchorWallMs + Number(process.hrtime.bigint() - monotonicAnchorHr) / 1e6;
+}
+function monotonicIso() {
+  return new Date(monotonicWallMs()).toISOString();
+}
+
 const root = resolve(import.meta.dirname, '..');
 const composeFile = resolve(root, 'load/docker-compose.yml');
 const rawRoot = resolve(root, 'load/results/raw');
@@ -1138,13 +1153,13 @@ export function startSamplers(config, scenarioDir, seams = {}) {
   let stopped = false;
   let samplerCode = null;
   let stopPromise;
-  // This host's wall clock is not guaranteed monotonic (observed transient forward
-  // jumps that later revert on WSL2), even though probes are always issued and
-  // appended one at a time. Clamp each stream's recorded timestamp to strictly
-  // increase in append order so evidence never regresses relative to a clock step.
+  // Probes are issued and appended one at a time, but two ticks can still land in
+  // the same millisecond. Clamp each stream's recorded timestamp to strictly
+  // increase in append order, using the shared monotonic clock so this stays
+  // comparable with the workload/sampler lifecycle checkpoints below.
   const lastEmittedMs = { api: 0, worker: 0, metrics: 0, stats: 0 };
   const nextTimestampMs = (key) => {
-    const now = Date.now();
+    const now = monotonicWallMs();
     const emitted = now > lastEmittedMs[key] ? now : lastEmittedMs[key] + 1;
     lastEmittedMs[key] = emitted;
     return emitted;
@@ -1352,15 +1367,15 @@ async function runScenario(config, definition) {
   let samplerFailure;
   let samplerDrainPromise = null;
   const failures = [];
-  runtime.workloadStartedAt = new Date().toISOString();
+  runtime.workloadStartedAt = monotonicIso();
   const workloadPromise = command(
     'docker',
     composeArgs(config.project, '--profile', 'k6', 'run', '--rm', 'k6'),
     { env, live: true, role: 'workload' },
   ).finally(() => {
-    runtime.workloadSettledAt = new Date().toISOString();
+    runtime.workloadSettledAt = monotonicIso();
   });
-  runtime.samplerStartedAt = new Date().toISOString();
+  runtime.samplerStartedAt = monotonicIso();
   await writeJsonAtomically(resolve(scenarioDir, 'runtime.json'), runtime);
   const stopSamplers = startSamplers(
     {
@@ -1379,7 +1394,7 @@ async function runScenario(config, definition) {
     k6 = await workloadPromise;
   } finally {
     samplerCode = await stopSamplers().catch(() => 1);
-    runtime.samplerStoppedAt = new Date().toISOString();
+    runtime.samplerStoppedAt = monotonicIso();
     await updateCommandStatus(commandStatusPath, {
       k6: signalExitCode(k6),
       sampler: samplerFailure ? 1 : samplerCode,
