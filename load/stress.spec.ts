@@ -230,7 +230,9 @@ describe('A5 harness hardening', () => {
       readFile(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'),
     ]);
     expect(compose).toContain(expected);
-    expect(workflow).toContain(`k6 run ${expected} load/k6/smoke.js`);
+    // The CI step quotes the flag: unquoted p(…) parentheses are a bash
+    // syntax error that aborted the k6-smoke job before k6 ever ran.
+    expect(workflow).toContain(`k6 run '${expected}' load/k6/smoke.js`);
   });
 
   it('P2 — generated table fails closed for a missing p99 and labels configured targets truthfully', () => {
