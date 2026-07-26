@@ -372,6 +372,29 @@ describe('Phase 5 Amendment A5 fail-closed convergence', () => {
     missingFinalRead.convergence.finalLiveCollection = false as true;
     expect(evaluateAudit(missingFinalRead).invariants.I4.pass).toBe(false);
   });
+
+  it('A5 — elapsedMs stays non-negative even when the wall clock steps backwards mid-run (uses the default monotonic clock, not Date.now)', async () => {
+    const dateNowSpy = vi.spyOn(Date, 'now');
+    const realNow = Date.now();
+    dateNowSpy.mockReturnValue(realNow);
+    try {
+      let calls = 0;
+      const evidence = await waitForConvergence(
+        async () => {
+          calls += 1;
+          // Simulate this host's observed CLOCK_REALTIME behaviour: a large
+          // backwards step (matching the ~-9651ms seen in duplicate-storm r3's
+          // published audit.json) landing between two collections.
+          if (calls === 2) dateNowSpy.mockReturnValue(realNow - 9_651);
+          return snapshotFixture();
+        },
+        { deadlineMs: 1500 },
+      );
+      expect(evidence.elapsedMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
 });
 
 describe('Phase 5 audit evaluator mandatory falsification controls', () => {
@@ -1356,7 +1379,7 @@ describe('Phase 5 Amendment A12 validation-to-publication capability', () => {
       closeAuditCliOptions(second);
       closeAndRemove(fixture);
     }
-  });
+  }, 20000);
 
   it('A12 — temp collisions and failures retain only bounded non-writable artifacts', async () => {
     const collision = temporaryPublication();
@@ -2015,6 +2038,9 @@ describe('Phase 5 Amendment A4 executable audit command', () => {
     expect(capturedOptions).toEqual({ live: true, role: 'audit' });
   });
 
+  // Real pnpm subprocess: cold-start fork/exec regularly exceeds the 5000ms
+  // vitest default on slow hosts and CI runners (same class as A12). The
+  // spawnSync call itself stays capped at 10s below.
   it('A7 — real pnpm 11 subprocess forwards --run-id without a literal separator', () => {
     const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
     const result = spawnSync(
@@ -2037,5 +2063,5 @@ describe('Phase 5 Amendment A4 executable audit command', () => {
     expect(output, redactedOutput).not.toContain('tsx audit.ts -- --run-id');
     expect(output, redactedOutput).toContain('Every audit flag is required exactly once');
     expect(output, redactedOutput).not.toMatch(/ECONN|Redis|Postgres|password|timeout/i);
-  });
+  }, 20_000);
 });

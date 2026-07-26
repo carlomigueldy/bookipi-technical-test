@@ -223,7 +223,7 @@ export async function createHarness(overrides: Partial<WorkerEnv> = {}): Promise
   const consumer = new OrdersConsumer(env, processor);
   const state = createReconciliationState();
   const reconciliation = new ReconciliationService(env, store, queue, state, repository, consumer);
-  const health = new HealthService(state);
+  const health = new HealthService(state, env);
   const freshLifecycles: FreshWorkerLifecycle[] = [];
   const productionLifecycles: ProductionMinimumPoolLifecycle[] = [];
 
@@ -286,7 +286,7 @@ export async function createHarness(overrides: Partial<WorkerEnv> = {}): Promise
         consumer: freshConsumer,
         reconciliation: freshReconciliation,
         state: freshState,
-        health: new HealthService(freshState),
+        health: new HealthService(freshState, env),
         async close() {
           await freshReconciliation.stop();
           await freshConsumer.close();
@@ -314,7 +314,7 @@ export async function createHarness(overrides: Partial<WorkerEnv> = {}): Promise
         consumer: freshConsumer,
         reconciliation: freshReconciliation,
         state: freshState,
-        health: new HealthService(freshState),
+        health: new HealthService(freshState, env),
         beforeConsumerStart: freshReconciliation.beforeConsumerStart,
         afterResumeVerified: freshReconciliation.afterResumeVerified,
         async close() {

@@ -37,6 +37,17 @@ export interface ReconciliationState {
   activeJobs: number;
   failedJobs: number;
   retainedQueueEntries?: number;
+  /**
+   * Set alongside `reconciliationHealthy = false` to mark the transition as a
+   * confirmed, structural failure (boot-time assessment, an explicitly
+   * thrown/caught reconciliation error, retained-unsafe DLQ entries, consumer
+   * termination, or shutdown) rather than a single periodic pass's fresh
+   * reassessment. `HealthService` reports confirmed failures immediately and
+   * only extends its staleness-budget grace to the unconfirmed case, so a
+   * fail-closed condition (e.g. malformed retained queue entries, an
+   * unrecoverable identity conflict) is never masked by the grace window.
+   */
+  reconciliationFailureConfirmed?: boolean;
 }
 
 export const createReconciliationState = (): ReconciliationState => {
@@ -51,6 +62,11 @@ export const createReconciliationState = (): ReconciliationState => {
   } as ReconciliationState;
   Object.defineProperty(state, 'retainedQueueEntries', {
     value: 0,
+    writable: true,
+    enumerable: false,
+  });
+  Object.defineProperty(state, 'reconciliationFailureConfirmed', {
+    value: false,
     writable: true,
     enumerable: false,
   });
@@ -200,6 +216,7 @@ export class ReconciliationService implements OnApplicationShutdown {
             this.state.bootstrapReconciled = true;
             this.state.consumerReady = true;
             this.state.reconciliationHealthy = !bootResult.degraded;
+            this.state.reconciliationFailureConfirmed = bootResult.degraded;
           } catch (error) {
             if (!processingStarted) {
               this.disposeTerminationSubscription();
@@ -263,6 +280,7 @@ export class ReconciliationService implements OnApplicationShutdown {
             result.retainedUnsafeCount,
           );
           this.state.reconciliationHealthy = false;
+          this.state.reconciliationFailureConfirmed = true;
         }
       })
       .finally(() => {
@@ -284,6 +302,7 @@ export class ReconciliationService implements OnApplicationShutdown {
     this.state.bootstrapReconciled = false;
     this.state.consumerReady = false;
     this.state.reconciliationHealthy = false;
+    this.state.reconciliationFailureConfirmed = true;
     this.bootController.abort(new WorkerLifecycleAbortError());
     const disposalErrors: unknown[] = [];
     try {
@@ -394,11 +413,22 @@ export class ReconciliationService implements OnApplicationShutdown {
     this.logger.log({ event: 'reconciliation.started' });
     try {
       const signal = this.bootController.signal;
+      const wasHealthy = this.state.reconciliationHealthy;
       const result = await this.scheduleMaintenance(() =>
         this.repository.withSessionReconciliationLock(() => this.runDiff(signal), signal),
       );
       this.state.retainedQueueEntries = result.queueIssueCount;
       this.state.reconciliationHealthy = !result.degraded;
+      if (this.state.reconciliationHealthy || wasHealthy) {
+        // Either recovered, or this is a fresh flip from healthy into this
+        // pass's unhealthy result — grace-eligible, matching the single
+        // self-healing storm-flap case. If it was ALREADY unhealthy going
+        // into this pass (e.g. a confirmed boot/explicit failure that simply
+        // persists), leave `reconciliationFailureConfirmed` untouched rather
+        // than downgrading a known structural problem back to grace-eligible
+        // just because a later routine pass reconfirms the same condition.
+        this.state.reconciliationFailureConfirmed = false;
+      }
       this.state.lastReconciledAt = new Date().toISOString();
       this.logger.log({ event: 'reconciliation.completed' });
     } catch (error) {
@@ -1030,6 +1060,7 @@ export class ReconciliationService implements OnApplicationShutdown {
   private handleUnexpectedConsumerTermination(termination: ConsumerRunTermination): void {
     this.state.consumerReady = false;
     this.state.reconciliationHealthy = false;
+    this.state.reconciliationFailureConfirmed = true;
     try {
       this.disposeContinuousLifecycle();
     } catch (error) {
@@ -1064,6 +1095,7 @@ export class ReconciliationService implements OnApplicationShutdown {
     this.state.bootstrapReconciled = false;
     this.state.consumerReady = false;
     this.state.reconciliationHealthy = false;
+    this.state.reconciliationFailureConfirmed = true;
     const cleanupErrors: unknown[] = [];
     try {
       this.disposeContinuousLifecycle();
@@ -1121,6 +1153,7 @@ export class ReconciliationService implements OnApplicationShutdown {
 
   private fail(error: unknown): void {
     this.state.reconciliationHealthy = false;
+    this.state.reconciliationFailureConfirmed = true;
     this.logger.error({
       event: 'reconciliation.failed',
       message: error instanceof Error ? error.message : String(error),

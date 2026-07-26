@@ -16,6 +16,21 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
+// This host's wall clock is not guaranteed monotonic (observed transient forward
+// jumps that later revert on WSL2). `Date.now()` reads taken at different call
+// sites (e.g. workloadSettledAt vs samplerStoppedAt) can therefore disagree about
+// ordering even when one is captured strictly after the other in program order.
+// Anchor a single monotonic source once and derive every sampler/lifecycle
+// timestamp from it so all comparisons share one non-decreasing clock.
+const monotonicAnchorWallMs = Date.now();
+const monotonicAnchorHr = process.hrtime.bigint();
+export function monotonicWallMs() {
+  return monotonicAnchorWallMs + Number(process.hrtime.bigint() - monotonicAnchorHr) / 1e6;
+}
+export function monotonicIso() {
+  return new Date(monotonicWallMs()).toISOString();
+}
+
 const root = resolve(import.meta.dirname, '..');
 const composeFile = resolve(root, 'load/docker-compose.yml');
 const rawRoot = resolve(root, 'load/results/raw');
@@ -565,6 +580,54 @@ function abortableDelay(milliseconds, signal = runnerAbortController.signal) {
   });
 }
 
+// Aligns k6's launch so the window-edge scenario starts LAUNCH_LEAD_MS before
+// the sale's startsAtMs, exercising both the pre-sale-rejected and post-sale
+// window edges.
+//
+// This host's CLOCK_REALTIME steps by up to ~10.3s roughly 20 times per 90s
+// scenario (independently confirmed by negative responseTime values in
+// api.log), so a gate that repeatedly re-polls Redis demanding the sample land
+// inside a narrow *wall-clock* band races the clock instability itself, not
+// just poll latency -- across a ~55s countdown the band was skipped on
+// roughly two thirds of runs. Instead: take one Redis TIME sample, derive the
+// (constant, one-shot) offset between the server's clock and this process's
+// own monotonic clock, and sleep to a deadline expressed on that monotonic
+// clock -- immune to later wall-clock steps because monotonicWallMs() is
+// anchored to process.hrtime.bigint(), not Date.now(). A single fresh Redis
+// re-poll right at the deadline (never the stale pre-sleep sample) confirms
+// alignment. ALIGNMENT_TOLERANCE_MS is sized to absorb realistic Redis
+// poll/round-trip latency (observed: low tens to a couple hundred ms) with
+// generous headroom, while still fail-closing on a genuinely missed window.
+export async function alignWindowEdgeLaunch({
+  startsAtMs,
+  initialServerTimeMs,
+  pollServerTimeMs,
+  launchLeadMs = 5000,
+  toleranceMs = 1500,
+  gateTimeoutMs = 55_000,
+  monotonicNow = monotonicWallMs,
+  delay = abortableDelay,
+}) {
+  if (startsAtMs - initialServerTimeMs < 15_000)
+    throw new Error('window-edge must remain at least 15s in the future after recreation');
+
+  const redisOffsetMs = initialServerTimeMs - monotonicNow();
+  const targetMonotonicMs = startsAtMs - launchLeadMs - redisOffsetMs;
+  const gateDeadlineMonotonicMs = monotonicNow() + gateTimeoutMs;
+
+  while (monotonicNow() < targetMonotonicMs) {
+    if (monotonicNow() >= gateDeadlineMonotonicMs)
+      throw new Error('Missed window-edge Redis-time launch envelope');
+    await delay(Math.min(250, Math.max(10, targetMonotonicMs - monotonicNow())));
+  }
+
+  const confirmedServerTimeMs = await pollServerTimeMs();
+  const deltaMs = startsAtMs - confirmedServerTimeMs;
+  if (Math.abs(deltaMs - launchLeadMs) > toleranceMs)
+    throw new Error('Missed window-edge Redis-time launch envelope');
+  return { confirmedServerTimeMs, deltaMs };
+}
+
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -781,8 +844,13 @@ export async function validateSamplerEvidence(scenarioDir, samplerStartedAt) {
   for (let index = firstK6Index; index <= lastK6Index; index += 1)
     if (!groups[index].services.has(WORKLOAD_STATS_SERVICE))
       throw new Error('container stats: missing k6 in active interval');
+  // `docker compose run --rm k6` only resolves (setting workloadSettledAt) once the
+  // exited k6 container has actually been removed, so a stats sample taken after k6
+  // exits but before that removal completes will truthfully never see it. Tolerate
+  // that inside the same completion-gap window already used to bound sampling
+  // cadence; anything earlier than that edge still must show k6.
   for (let index = lastK6Index + 1; index < groups.length; index += 1)
-    if (groups[index].timestamp < workloadSettled)
+    if (groups[index].timestamp < workloadSettled - STATS_MAX_COMPLETION_GAP_MS)
       throw new Error('container stats: pre-settlement sample missing k6');
   const completionGaps = [groups[0].timestamp - runtimeSamplerStarted];
   for (let index = 1; index < groups.length; index += 1)
@@ -1138,6 +1206,17 @@ export function startSamplers(config, scenarioDir, seams = {}) {
   let stopped = false;
   let samplerCode = null;
   let stopPromise;
+  // Probes are issued and appended one at a time, but two ticks can still land in
+  // the same millisecond. Clamp each stream's recorded timestamp to strictly
+  // increase in append order, using the shared monotonic clock so this stays
+  // comparable with the workload/sampler lifecycle checkpoints below.
+  const lastEmittedMs = { api: 0, worker: 0, metrics: 0, stats: 0 };
+  const nextTimestampMs = (key) => {
+    const now = monotonicWallMs();
+    const emitted = now > lastEmittedMs[key] ? now : lastEmittedMs[key] + 1;
+    lastEmittedMs[key] = emitted;
+    return emitted;
+  };
   const tick = async () => {
     if (inFlight || stopped) return inFlight;
     inFlight = (async () => {
@@ -1147,7 +1226,7 @@ export function startSamplers(config, scenarioDir, seams = {}) {
           ['worker', `${config.workerUrl}/health/ready`],
           ['metrics', `${config.apiUrl}/sale/metrics`],
         ]) {
-          const start = Date.now();
+          const start = monotonicWallMs();
           try {
             const response = await fetchImpl(url, {
               signal: AbortSignal.any([
@@ -1158,12 +1237,12 @@ export function startSamplers(config, scenarioDir, seams = {}) {
             });
             const body = await response.json();
             streams[key].write(
-              `${JSON.stringify({ timestamp: new Date().toISOString(), status: response.status, latencyMs: Date.now() - start, body })}\n`,
+              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: response.status, latencyMs: Math.round(monotonicWallMs() - start), body })}\n`,
             );
           } catch (error) {
             if (stopped && localAbort.signal.aborted) return;
             streams[key].write(
-              `${JSON.stringify({ timestamp: new Date().toISOString(), status: 0, latencyMs: Date.now() - start, error: String(error) })}\n`,
+              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: 0, latencyMs: Math.round(monotonicWallMs() - start), error: String(error) })}\n`,
             );
           }
         }
@@ -1173,7 +1252,7 @@ export function startSamplers(config, scenarioDir, seams = {}) {
           { env: config.env, role: 'sampler', timeoutMs: 5000 },
         );
         validateCommandResult('Docker stats sampler', stats);
-        const timestamp = new Date().toISOString();
+        const timestamp = new Date(nextTimestampMs('stats')).toISOString();
         for (const row of normalizeDockerStats(stats.stdout, timestamp, config.project))
           streams.stats.write(`${row}\n`);
         samplerCode = 0;
@@ -1301,18 +1380,17 @@ async function runScenario(config, definition) {
       body.totalStock === definition.stock,
   );
   if (definition.scenario === 'window-edge') {
-    if (startsAtMs - status.serverTimeMs < 15_000)
-      throw new Error('window-edge must remain at least 15s in the future after recreation');
-    while (status.serverTimeMs < startsAtMs - 5250 || status.serverTimeMs > startsAtMs - 4750) {
-      const current = await waitJson(
-        `${config.apiUrl}/sale/status`,
-        (body) => body.saleId === saleId,
-      );
-      const delta = startsAtMs - current.serverTimeMs;
-      if (delta < 4750) throw new Error('Missed window-edge Redis-time launch envelope');
-      await abortableDelay(Math.min(250, Math.max(10, delta - 5000)));
-      status.serverTimeMs = current.serverTimeMs;
-    }
+    await alignWindowEdgeLaunch({
+      startsAtMs,
+      initialServerTimeMs: status.serverTimeMs,
+      pollServerTimeMs: async () => {
+        const fresh = await waitJson(
+          `${config.apiUrl}/sale/status`,
+          (body) => body.saleId === saleId,
+        );
+        return fresh.serverTimeMs;
+      },
+    });
   }
   const rendered = await requireSuccess(
     'Compose rendering',
@@ -1341,15 +1419,15 @@ async function runScenario(config, definition) {
   let samplerFailure;
   let samplerDrainPromise = null;
   const failures = [];
-  runtime.workloadStartedAt = new Date().toISOString();
+  runtime.workloadStartedAt = monotonicIso();
   const workloadPromise = command(
     'docker',
     composeArgs(config.project, '--profile', 'k6', 'run', '--rm', 'k6'),
     { env, live: true, role: 'workload' },
   ).finally(() => {
-    runtime.workloadSettledAt = new Date().toISOString();
+    runtime.workloadSettledAt = monotonicIso();
   });
-  runtime.samplerStartedAt = new Date().toISOString();
+  runtime.samplerStartedAt = monotonicIso();
   await writeJsonAtomically(resolve(scenarioDir, 'runtime.json'), runtime);
   const stopSamplers = startSamplers(
     {
@@ -1368,7 +1446,7 @@ async function runScenario(config, definition) {
     k6 = await workloadPromise;
   } finally {
     samplerCode = await stopSamplers().catch(() => 1);
-    runtime.samplerStoppedAt = new Date().toISOString();
+    runtime.samplerStoppedAt = monotonicIso();
     await updateCommandStatus(commandStatusPath, {
       k6: signalExitCode(k6),
       sampler: samplerFailure ? 1 : samplerCode,
@@ -1493,7 +1571,7 @@ async function runScenario(config, definition) {
     composeArgs(config.project, 'logs', '--no-color', '--timestamps', 'worker'),
     { env, role: 'observability', timeoutMs: 30_000 },
   ).catch(failedLogCommand);
-  runtime.logsCapturedAt = new Date().toISOString();
+  runtime.logsCapturedAt = monotonicIso();
   let apiLogText = '';
   let workerLogText = '';
   for (const [service, label, result, field, file] of [
@@ -1532,7 +1610,7 @@ async function runScenario(config, definition) {
     Number(postgresAfter.deadlocks ?? 0) > 0 && 'Postgres deadlock',
     fatalLog.test(apiLogText + workerLogText) && 'fatal application log',
   ].filter(Boolean);
-  runtime.endedAt = new Date().toISOString();
+  runtime.endedAt = monotonicIso();
   await writeJsonAtomically(resolve(scenarioDir, 'runtime.json'), runtime);
   if (signalExitCode(k6) !== 0) failures.push(`k6 status=${signalExitCode(k6)}`);
   if (warnings.length > 0)

@@ -27,6 +27,12 @@ export const HTTP_HEADERS_TIMEOUT_MS = 5000;
 export const HTTP_REQUEST_TIMEOUT_MS = 10000;
 export const HTTP_KEEP_ALIVE_TIMEOUT_MS = 5000;
 export const HTTP_MAX_REQUESTS_PER_SOCKET = 1000;
+// Node's net.Server default backlog is 511 — too shallow for a duplicate-storm
+// burst of ~5,000 simultaneous connections, which overflows the accept queue
+// and drops sockets before Fastify ever sees them (connection admission, not
+// request latency). Raised alongside `net.core.somaxconn` in
+// `load/docker-compose.yml` so the kernel actually honours this value.
+export const HTTP_LISTEN_BACKLOG_CONNECTIONS = 4096;
 
 /** Constructs the one direct-exposure adapter policy shared by prod and tests. */
 export function createHttpAdapter(apiEnv: ApiEnv): FastifyAdapter {
@@ -125,7 +131,11 @@ export async function bootstrap(): Promise<void> {
   application = app;
   await configureApp(app, env);
 
-  await app.listen(env.API_PORT, env.API_HOST);
+  await app.listen({
+    port: env.API_PORT,
+    host: env.API_HOST,
+    backlog: HTTP_LISTEN_BACKLOG_CONNECTIONS,
+  });
 
   NestLogger.log(
     `api listening on http://${env.API_HOST}:${env.API_PORT}/${API_GLOBAL_PREFIX}`,

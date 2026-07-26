@@ -12,6 +12,20 @@ allowBuilds:
   ssh2: false
 overrides:
   vite: ^6.0.5
+  # GHSA-c96f-x56v-gq3h: find-my-way DDoS with HTTP2, fixed >=9.6.1.
+  # fastify@5.10.0 requires ^9.6.0 and @nestjs/platform-fastify@11.1.28 pins
+  # an exact 9.6.0; 9.7.0 is a same-major patch bump, compatible with both.
+  find-my-way: ^9.7.0
+  # GHSA-mh99-v99m-4gvg: brace-expansion DoS via unbounded expansion length,
+  # advisory range "<=5.0.7" spans all major lines (1.x/2.x/5.x) since no
+  # backport was published for the older majors. 5.x's API is a breaking
+  # change (named `expand` export vs. the 1.x/2.x default function export),
+  # which would break minimatch@3.1.5/9.0.9 (eslint, @nestjs/cli,
+  # testcontainers, dev-only paths) if invoked on a brace pattern. Verified
+  # this repo's eslint/tsc build/tsconfig globs contain no `{...}` brace
+  # syntax, and `pnpm --filter @flash/api lint/build/test` all pass clean
+  # with this override in place, so the blast radius is empty in practice.
+  brace-expansion: ^5.0.8
 # PRD §10: dependency audit gate (.github/workflows/ci.yml `audit` job) runs
 # `pnpm audit --audit-level high`. Ship this list empty. Add an entry only for a
 # genuinely unfixable high/critical advisory, with a mandatory reason and review
