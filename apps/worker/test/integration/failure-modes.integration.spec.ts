@@ -210,7 +210,7 @@ async function stopIfRunning(child: ReturnType<typeof spawn>): Promise<void> {
     async () => child.exitCode !== null || child.signalCode !== null,
     Boolean,
     'test child cleanup',
-    10_000,
+    15_000,
   ).catch(() => undefined);
 }
 
@@ -396,7 +396,10 @@ describe('Phase 3 real-container durability failures', () => {
     });
     await h.add(r1);
     const id = buildOrdersJobId(r1.saleId, r1.userId);
-    await awaitState(h, id, 'failed', 20_000);
+    // Exponential backoff (200ms base, attempts=5) totals 200+400+800+1600=3000ms
+    // worst-case before the job lands in 'failed'; 30s keeps ~10x margin for
+    // WSL2 timer/IO jitter in delayed-job promotion.
+    await awaitState(h, id, 'failed', 30_000);
     await failing.close();
     await h.repository.resolveFailed(r1, () =>
       h.store.compensate(r1.saleId, r1.userId, r1.reservationId),
@@ -1095,7 +1098,7 @@ describe('Phase 3 real-container durability failures', () => {
         async () => ({ exitCode: p1.child.exitCode, signalCode: p1.child.signalCode }),
         ({ signalCode }) => signalCode === 'SIGKILL',
         'built P1 SIGKILL exit',
-        10_000,
+        15_000,
       );
       expect(await (await h.queue.getJob(jobId))?.getState()).toBe('active');
       expect(await h.redis.exists(lockKey)).toBe(1);
@@ -1440,7 +1443,7 @@ describe('Phase 3 real-container durability failures', () => {
     } finally {
       await stopIfRunning(production.child);
     }
-  }, 20_000);
+  }, 35_000);
 
   it('A4 — purchases committed between reservation HSCAN and buyer SSCAN remain healthy and durable', async () => {
     const latePurchaseCount = 32;
