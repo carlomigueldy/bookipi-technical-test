@@ -1138,6 +1138,17 @@ export function startSamplers(config, scenarioDir, seams = {}) {
   let stopped = false;
   let samplerCode = null;
   let stopPromise;
+  // This host's wall clock is not guaranteed monotonic (observed transient forward
+  // jumps that later revert on WSL2), even though probes are always issued and
+  // appended one at a time. Clamp each stream's recorded timestamp to strictly
+  // increase in append order so evidence never regresses relative to a clock step.
+  const lastEmittedMs = { api: 0, worker: 0, metrics: 0, stats: 0 };
+  const nextTimestampMs = (key) => {
+    const now = Date.now();
+    const emitted = now > lastEmittedMs[key] ? now : lastEmittedMs[key] + 1;
+    lastEmittedMs[key] = emitted;
+    return emitted;
+  };
   const tick = async () => {
     if (inFlight || stopped) return inFlight;
     inFlight = (async () => {
@@ -1158,12 +1169,12 @@ export function startSamplers(config, scenarioDir, seams = {}) {
             });
             const body = await response.json();
             streams[key].write(
-              `${JSON.stringify({ timestamp: new Date().toISOString(), status: response.status, latencyMs: Date.now() - start, body })}\n`,
+              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: response.status, latencyMs: Date.now() - start, body })}\n`,
             );
           } catch (error) {
             if (stopped && localAbort.signal.aborted) return;
             streams[key].write(
-              `${JSON.stringify({ timestamp: new Date().toISOString(), status: 0, latencyMs: Date.now() - start, error: String(error) })}\n`,
+              `${JSON.stringify({ timestamp: new Date(nextTimestampMs(key)).toISOString(), status: 0, latencyMs: Date.now() - start, error: String(error) })}\n`,
             );
           }
         }
@@ -1173,7 +1184,7 @@ export function startSamplers(config, scenarioDir, seams = {}) {
           { env: config.env, role: 'sampler', timeoutMs: 5000 },
         );
         validateCommandResult('Docker stats sampler', stats);
-        const timestamp = new Date().toISOString();
+        const timestamp = new Date(nextTimestampMs('stats')).toISOString();
         for (const row of normalizeDockerStats(stats.stdout, timestamp, config.project))
           streams.stats.write(`${row}\n`);
         samplerCode = 0;
