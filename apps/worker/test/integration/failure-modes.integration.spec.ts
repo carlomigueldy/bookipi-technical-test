@@ -312,7 +312,13 @@ describe('Phase 3 real-container durability failures', () => {
     const failing = await runWorker(h, (job) => failedProcessor.process(job));
     await h.add(payload);
     const id = buildOrdersJobId(payload.saleId, payload.userId);
-    await awaitState(h, id, 'failed', 20_000);
+    // Exponential backoff (200ms base, attempts=5) totals 200+400+800+1600=3000ms
+    // worst-case before the job lands in 'failed'; measured passing runs land at
+    // 2.1-3.1s. 40s keeps ~10x margin (matching test 6's precedent) for this
+    // WSL2 host's proven ±10.3s CLOCK_REALTIME steps, which can both postpone
+    // BullMQ's wall-clock delayed-job promotion and prematurely trip this
+    // eventually() deadline via a forward step.
+    await awaitState(h, id, 'failed', 40_000);
     await failing.close();
     await badPool.end();
     expect((await h.queue.getJob(id))?.attemptsMade).toBe(ORDERS_JOB_ATTEMPTS);
