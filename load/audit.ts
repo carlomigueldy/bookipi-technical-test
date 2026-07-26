@@ -33,6 +33,23 @@ const { Pool } = pg;
 const RUN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{7,31}$/;
 const PAGE_SIZE = 500;
 
+// CLOCK_REALTIME on this host is not guaranteed monotonic (observed transient
+// jumps that later revert on WSL2). A raw `Date.now()` read taken after a raw
+// `Date.now()` read earlier in the same run can therefore be "smaller" than the
+// earlier one, which previously surfaced as a negative `elapsedMs` in published
+// audit.json evidence. Anchor a single monotonic source once per process and
+// derive every duration/identity timestamp this module emits from it so
+// comparisons -- within this process and against stress.mjs's own anchor --
+// stay non-decreasing.
+const monotonicAnchorWallMs = Date.now();
+const monotonicAnchorHr = process.hrtime.bigint();
+export function monotonicWallMs(): number {
+  return monotonicAnchorWallMs + Number(process.hrtime.bigint() - monotonicAnchorHr) / 1e6;
+}
+export function monotonicIso(): string {
+  return new Date(monotonicWallMs()).toISOString();
+}
+
 export const AUDIT_RAW_RESULTS_ROOT = fileURLToPath(new URL('./results/raw/', import.meta.url));
 
 interface SaleConfig {
@@ -164,7 +181,7 @@ export function evaluateAudit(input: AuditEvaluationInput): AuditReport {
     runId: input.runId,
     scenario: input.scenario,
     saleId: input.saleId,
-    auditedAt: new Date().toISOString(),
+    auditedAt: monotonicIso(),
     expectedConfirmed: input.expectedConfirmed,
     convergence: input.convergence,
     postgres: input.postgres,
@@ -1119,7 +1136,11 @@ export async function waitForConvergence(
     delay?: (milliseconds: number) => Promise<void>;
   },
 ): Promise<ConvergenceEvidence> {
-  const now = options.now ?? Date.now;
+  // Default to a monotonic clock, not Date.now(): this host's CLOCK_REALTIME can
+  // step backwards mid-run, and elapsedMs is a *duration* (now() - startedAt),
+  // which must never go negative. monotonicWallMs() is anchored to
+  // process.hrtime.bigint() so it is immune to later wall-clock steps.
+  const now = options.now ?? monotonicWallMs;
   const delayFor = options.delay ?? realDelay;
   const startedAt = now();
   let backoffMs = 100;

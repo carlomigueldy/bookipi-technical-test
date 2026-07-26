@@ -372,6 +372,29 @@ describe('Phase 5 Amendment A5 fail-closed convergence', () => {
     missingFinalRead.convergence.finalLiveCollection = false as true;
     expect(evaluateAudit(missingFinalRead).invariants.I4.pass).toBe(false);
   });
+
+  it('A5 — elapsedMs stays non-negative even when the wall clock steps backwards mid-run (uses the default monotonic clock, not Date.now)', async () => {
+    const dateNowSpy = vi.spyOn(Date, 'now');
+    const realNow = Date.now();
+    dateNowSpy.mockReturnValue(realNow);
+    try {
+      let calls = 0;
+      const evidence = await waitForConvergence(
+        async () => {
+          calls += 1;
+          // Simulate this host's observed CLOCK_REALTIME behaviour: a large
+          // backwards step (matching the ~-9651ms seen in duplicate-storm r3's
+          // published audit.json) landing between two collections.
+          if (calls === 2) dateNowSpy.mockReturnValue(realNow - 9_651);
+          return snapshotFixture();
+        },
+        { deadlineMs: 1500 },
+      );
+      expect(evidence.elapsedMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
 });
 
 describe('Phase 5 audit evaluator mandatory falsification controls', () => {
