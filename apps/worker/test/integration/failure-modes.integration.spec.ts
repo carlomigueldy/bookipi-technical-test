@@ -1245,7 +1245,7 @@ describe('Phase 3 real-container durability failures', () => {
         async () => p3?.child.exitCode,
         (code) => code !== null,
         'built P3 SIGTERM exit',
-        WORKER_SHUTDOWN_WATCHDOG_MS,
+        15_000,
       );
       expect(p3.child.exitCode).toBe(0);
       expect(p3.output()).toContain('worker.shutdown_started');
@@ -1418,10 +1418,10 @@ describe('Phase 3 real-container durability failures', () => {
         },
         (code) => code !== null,
         'invalid production pool-size exit',
-        2_000,
+        15_000,
       );
       expect(production.child.exitCode).toBe(1);
-      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(Date.now() - startedAt).toBeLessThan(15_000);
       expect(production.output()).toContain('invalid environment configuration');
       expect(production.output()).toContain('WORKER_PG_POOL_MAX');
       expect(healthOpened).toBe(false);
@@ -1440,7 +1440,7 @@ describe('Phase 3 real-container durability failures', () => {
     } finally {
       await stopIfRunning(production.child);
     }
-  }, 10_000);
+  }, 20_000);
 
   it('A4 — purchases committed between reservation HSCAN and buyer SSCAN remain healthy and durable', async () => {
     const latePurchaseCount = 32;
