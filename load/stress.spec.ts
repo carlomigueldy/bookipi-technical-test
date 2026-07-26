@@ -26,12 +26,15 @@ const {
   PHASE5_IMPLEMENTATION_INPUTS,
   STATS_MAX_COMPLETION_GAP_MS,
   WORKLOAD_STATS_SERVICE,
+  alignWindowEdgeLaunch,
   command,
   computeImplementationDigest,
   createChildRegistry,
   formatResultsMarkdown,
   formatComposeLogEvidence,
   formatRedisSlowlogEvidence,
+  monotonicIso,
+  monotonicWallMs,
   normalizeDockerStats,
   signalExitCode,
   startSamplers,
@@ -1228,5 +1231,178 @@ describe('A5 harness hardening', () => {
     const empty = await inventoryFixture();
     await writeFile(join(empty, 'worker.log'), '');
     await expect(validateEvidenceInventory(empty)).rejects.toThrow(/worker.log/);
+  });
+
+  describe('window-edge launch gate', () => {
+    function fakeMonotonicClock(startValue = 0) {
+      let value = startValue;
+      return {
+        now: () => value,
+        delay: async (milliseconds: number) => {
+          value += milliseconds;
+        },
+      };
+    }
+
+    it('schedules the launch on a monotonic deadline and only re-polls Redis once, right at the deadline (not a repeated wall-clock band race)', async () => {
+      const clock = fakeMonotonicClock(0);
+      const startsAtMs = 1_000_000;
+      // Redis reports it is 50s before the sale start at the moment this
+      // process's own monotonic clock reads 0.
+      const initialServerTimeMs = startsAtMs - 50_000;
+      let pollCalls = 0;
+      let polledAtMonotonicMs: number | undefined;
+      const pollServerTimeMs = async () => {
+        pollCalls += 1;
+        polledAtMonotonicMs = clock.now();
+        return startsAtMs - 5000;
+      };
+
+      const result = await alignWindowEdgeLaunch({
+        startsAtMs,
+        initialServerTimeMs,
+        pollServerTimeMs,
+        monotonicNow: clock.now,
+        delay: clock.delay,
+      });
+
+      expect(pollCalls).toBe(1);
+      // The confirm poll only happens once the monotonic deadline (45_000 on
+      // this fake clock: startsAtMs - launchLeadMs - offset) has been reached.
+      expect(polledAtMonotonicMs).toBeGreaterThanOrEqual(45_000);
+      expect(result.confirmedServerTimeMs).toBe(startsAtMs - 5000);
+      expect(result.deltaMs).toBe(5000);
+    });
+
+    it('uses a fresh post-wait reading, not the stale pre-delay sample, to decide alignment', async () => {
+      const clock = fakeMonotonicClock(0);
+      const startsAtMs = 1_000_000;
+      const initialServerTimeMs = startsAtMs - 50_000;
+      const staleValue = startsAtMs - 50_000;
+      let pollCalls = 0;
+      const pollServerTimeMs = async () => {
+        pollCalls += 1;
+        // If this were evaluated against a stale sample assigned before the
+        // wait completed, it would still equal `staleValue` and the loop
+        // would never observe it converge on the target.
+        return startsAtMs - 5000;
+      };
+
+      const result = await alignWindowEdgeLaunch({
+        startsAtMs,
+        initialServerTimeMs,
+        pollServerTimeMs,
+        monotonicNow: clock.now,
+        delay: clock.delay,
+      });
+
+      expect(pollCalls).toBe(1);
+      expect(result.confirmedServerTimeMs).not.toBe(staleValue);
+      expect(result.confirmedServerTimeMs).toBe(startsAtMs - 5000);
+    });
+
+    it('tolerates a simulated clock step: a fresh confirm sample within the widened tolerance still passes', async () => {
+      const clock = fakeMonotonicClock(0);
+      const startsAtMs = 1_000_000;
+      const initialServerTimeMs = startsAtMs - 50_000;
+      // Simulate the host's wall clock having stepped by 900ms relative to a
+      // naive linear extrapolation of the initial Redis sample.
+      const pollServerTimeMs = async () => startsAtMs - 5000 + 900;
+
+      const result = await alignWindowEdgeLaunch({
+        startsAtMs,
+        initialServerTimeMs,
+        pollServerTimeMs,
+        monotonicNow: clock.now,
+        delay: clock.delay,
+      });
+
+      expect(result.deltaMs).toBe(4100);
+    });
+
+    it('still fails closed when the fresh confirm sample lands outside the widened tolerance', async () => {
+      const clock = fakeMonotonicClock(0);
+      const startsAtMs = 1_000_000;
+      const initialServerTimeMs = startsAtMs - 50_000;
+      // A step far larger than realistic Redis-poll latency: a genuinely
+      // missed window, which must still abort.
+      const pollServerTimeMs = async () => startsAtMs - 5000 + 5000;
+
+      await expect(
+        alignWindowEdgeLaunch({
+          startsAtMs,
+          initialServerTimeMs,
+          pollServerTimeMs,
+          monotonicNow: clock.now,
+          delay: clock.delay,
+        }),
+      ).rejects.toThrow('Missed window-edge Redis-time launch envelope');
+    });
+
+    it('fails closed against a hard monotonic deadline when alignment cannot be reached in time', async () => {
+      const clock = fakeMonotonicClock(0);
+      const startsAtMs = 1_000_000;
+      // Redis reports it is only 16s before start, so the requested 5s launch
+      // lead would require waiting past this scenario's alignment budget only
+      // if the offset math pushes the target beyond gateTimeoutMs; force that
+      // by using a tiny gateTimeoutMs.
+      const initialServerTimeMs = startsAtMs - 16_000;
+      const pollServerTimeMs = async () => startsAtMs - 5000;
+
+      await expect(
+        alignWindowEdgeLaunch({
+          startsAtMs,
+          initialServerTimeMs,
+          pollServerTimeMs,
+          monotonicNow: clock.now,
+          delay: clock.delay,
+          gateTimeoutMs: 5000,
+        }),
+      ).rejects.toThrow('Missed window-edge Redis-time launch envelope');
+    });
+
+    it('rejects recreation results that leave the sale starting in under 15s', async () => {
+      const clock = fakeMonotonicClock(0);
+      const startsAtMs = 1_000_000;
+      await expect(
+        alignWindowEdgeLaunch({
+          startsAtMs,
+          initialServerTimeMs: startsAtMs - 10_000,
+          pollServerTimeMs: async () => startsAtMs - 5000,
+          monotonicNow: clock.now,
+          delay: clock.delay,
+        }),
+      ).rejects.toThrow('window-edge must remain at least 15s in the future after recreation');
+    });
+  });
+
+  describe('runtime.json lifecycle stamps stay monotonic under a stepping wall clock', () => {
+    it('monotonicIso() readings never move backwards even when Date.now() steps backwards in between', () => {
+      const dateNowSpy = vi.spyOn(Date, 'now');
+      const realNow = Date.now();
+      dateNowSpy.mockReturnValue(realNow);
+
+      // This mirrors the sequence that produced logsCapturedAt preceding
+      // samplerStoppedAt in window-edge r2: two stamps recorded back-to-back
+      // in program order, with the host's CLOCK_REALTIME stepping backwards
+      // (here simulated as ~10.3s, matching the observed step magnitude)
+      // between the two reads.
+      const first = monotonicIso();
+      dateNowSpy.mockReturnValue(realNow - 10_300);
+      const second = monotonicIso();
+
+      expect(Date.parse(second)).toBeGreaterThanOrEqual(Date.parse(first));
+
+      dateNowSpy.mockRestore();
+    });
+
+    it('monotonicWallMs() is immune to a simulated Date.now() step because it derives from hrtime, not Date.now()', () => {
+      const before = monotonicWallMs();
+      const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() - 60_000);
+      const after = monotonicWallMs();
+      dateNowSpy.mockRestore();
+
+      expect(after).toBeGreaterThanOrEqual(before);
+    });
   });
 });

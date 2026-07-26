@@ -24,10 +24,10 @@ import { pathToFileURL } from 'node:url';
 // timestamp from it so all comparisons share one non-decreasing clock.
 const monotonicAnchorWallMs = Date.now();
 const monotonicAnchorHr = process.hrtime.bigint();
-function monotonicWallMs() {
+export function monotonicWallMs() {
   return monotonicAnchorWallMs + Number(process.hrtime.bigint() - monotonicAnchorHr) / 1e6;
 }
-function monotonicIso() {
+export function monotonicIso() {
   return new Date(monotonicWallMs()).toISOString();
 }
 
@@ -578,6 +578,54 @@ function abortableDelay(milliseconds, signal = runnerAbortController.signal) {
     }, milliseconds);
     signal.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+// Aligns k6's launch so the window-edge scenario starts LAUNCH_LEAD_MS before
+// the sale's startsAtMs, exercising both the pre-sale-rejected and post-sale
+// window edges.
+//
+// This host's CLOCK_REALTIME steps by up to ~10.3s roughly 20 times per 90s
+// scenario (independently confirmed by negative responseTime values in
+// api.log), so a gate that repeatedly re-polls Redis demanding the sample land
+// inside a narrow *wall-clock* band races the clock instability itself, not
+// just poll latency -- across a ~55s countdown the band was skipped on
+// roughly two thirds of runs. Instead: take one Redis TIME sample, derive the
+// (constant, one-shot) offset between the server's clock and this process's
+// own monotonic clock, and sleep to a deadline expressed on that monotonic
+// clock -- immune to later wall-clock steps because monotonicWallMs() is
+// anchored to process.hrtime.bigint(), not Date.now(). A single fresh Redis
+// re-poll right at the deadline (never the stale pre-sleep sample) confirms
+// alignment. ALIGNMENT_TOLERANCE_MS is sized to absorb realistic Redis
+// poll/round-trip latency (observed: low tens to a couple hundred ms) with
+// generous headroom, while still fail-closing on a genuinely missed window.
+export async function alignWindowEdgeLaunch({
+  startsAtMs,
+  initialServerTimeMs,
+  pollServerTimeMs,
+  launchLeadMs = 5000,
+  toleranceMs = 1500,
+  gateTimeoutMs = 55_000,
+  monotonicNow = monotonicWallMs,
+  delay = abortableDelay,
+}) {
+  if (startsAtMs - initialServerTimeMs < 15_000)
+    throw new Error('window-edge must remain at least 15s in the future after recreation');
+
+  const redisOffsetMs = initialServerTimeMs - monotonicNow();
+  const targetMonotonicMs = startsAtMs - launchLeadMs - redisOffsetMs;
+  const gateDeadlineMonotonicMs = monotonicNow() + gateTimeoutMs;
+
+  while (monotonicNow() < targetMonotonicMs) {
+    if (monotonicNow() >= gateDeadlineMonotonicMs)
+      throw new Error('Missed window-edge Redis-time launch envelope');
+    await delay(Math.min(250, Math.max(10, targetMonotonicMs - monotonicNow())));
+  }
+
+  const confirmedServerTimeMs = await pollServerTimeMs();
+  const deltaMs = startsAtMs - confirmedServerTimeMs;
+  if (Math.abs(deltaMs - launchLeadMs) > toleranceMs)
+    throw new Error('Missed window-edge Redis-time launch envelope');
+  return { confirmedServerTimeMs, deltaMs };
 }
 
 function isObject(value) {
@@ -1332,18 +1380,17 @@ async function runScenario(config, definition) {
       body.totalStock === definition.stock,
   );
   if (definition.scenario === 'window-edge') {
-    if (startsAtMs - status.serverTimeMs < 15_000)
-      throw new Error('window-edge must remain at least 15s in the future after recreation');
-    while (status.serverTimeMs < startsAtMs - 5250 || status.serverTimeMs > startsAtMs - 4750) {
-      const current = await waitJson(
-        `${config.apiUrl}/sale/status`,
-        (body) => body.saleId === saleId,
-      );
-      const delta = startsAtMs - current.serverTimeMs;
-      if (delta < 4750) throw new Error('Missed window-edge Redis-time launch envelope');
-      await abortableDelay(Math.min(250, Math.max(10, delta - 5000)));
-      status.serverTimeMs = current.serverTimeMs;
-    }
+    await alignWindowEdgeLaunch({
+      startsAtMs,
+      initialServerTimeMs: status.serverTimeMs,
+      pollServerTimeMs: async () => {
+        const fresh = await waitJson(
+          `${config.apiUrl}/sale/status`,
+          (body) => body.saleId === saleId,
+        );
+        return fresh.serverTimeMs;
+      },
+    });
   }
   const rendered = await requireSuccess(
     'Compose rendering',
@@ -1524,7 +1571,7 @@ async function runScenario(config, definition) {
     composeArgs(config.project, 'logs', '--no-color', '--timestamps', 'worker'),
     { env, role: 'observability', timeoutMs: 30_000 },
   ).catch(failedLogCommand);
-  runtime.logsCapturedAt = new Date().toISOString();
+  runtime.logsCapturedAt = monotonicIso();
   let apiLogText = '';
   let workerLogText = '';
   for (const [service, label, result, field, file] of [
@@ -1563,7 +1610,7 @@ async function runScenario(config, definition) {
     Number(postgresAfter.deadlocks ?? 0) > 0 && 'Postgres deadlock',
     fatalLog.test(apiLogText + workerLogText) && 'fatal application log',
   ].filter(Boolean);
-  runtime.endedAt = new Date().toISOString();
+  runtime.endedAt = monotonicIso();
   await writeJsonAtomically(resolve(scenarioDir, 'runtime.json'), runtime);
   if (signalExitCode(k6) !== 0) failures.push(`k6 status=${signalExitCode(k6)}`);
   if (warnings.length > 0)
