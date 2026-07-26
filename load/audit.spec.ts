@@ -2038,6 +2038,9 @@ describe('Phase 5 Amendment A4 executable audit command', () => {
     expect(capturedOptions).toEqual({ live: true, role: 'audit' });
   });
 
+  // Real pnpm subprocess: cold-start fork/exec regularly exceeds the 5000ms
+  // vitest default on slow hosts and CI runners (same class as A12). The
+  // spawnSync call itself stays capped at 10s below.
   it('A7 — real pnpm 11 subprocess forwards --run-id without a literal separator', () => {
     const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
     const result = spawnSync(
@@ -2060,5 +2063,5 @@ describe('Phase 5 Amendment A4 executable audit command', () => {
     expect(output, redactedOutput).not.toContain('tsx audit.ts -- --run-id');
     expect(output, redactedOutput).toContain('Every audit flag is required exactly once');
     expect(output, redactedOutput).not.toMatch(/ECONN|Redis|Postgres|password|timeout/i);
-  });
+  }, 20_000);
 });
