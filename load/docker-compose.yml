@@ -66,6 +66,13 @@ services:
     depends_on:
       redis: { condition: service_healthy }
       postgres: { condition: service_healthy }
+    # net.core.somaxconn is namespaced per-container: raise it so the kernel
+    # accept queue can actually hold the app's listen() backlog (4096) during
+    # duplicate-storm's ~5,000-connection burst, instead of silently
+    # truncating to the kernel default (usually 4096 already, but pinned
+    # explicitly here so this doesn't regress on hosts with a lower default).
+    sysctls:
+      net.core.somaxconn: 4096
     deploy:
       resources:
         limits:
