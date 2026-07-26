@@ -366,7 +366,7 @@ jobs:
         run: |
           set -euo pipefail
           confirmed="$(node -e "const fs=require('node:fs'); const s=JSON.parse(fs.readFileSync(process.env.K6_RESULTS_DIR+'/smoke/r1/k6-summary.json','utf8')); const n=s.phase5?.outcomes?.confirmed; if(!Number.isSafeInteger(n)) process.exit(1); process.stdout.write(String(n))")"
-          pnpm --filter @flash/load audit -- \
+          pnpm --filter @flash/load run audit -- \
             --run-id "$RUN_ID" \
             --scenario smoke \
             --sale-id "$SALE_ID" \
